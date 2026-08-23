@@ -68,6 +68,7 @@ restore_conda_config() {
 install_client() {
   install -d -m 0755 "$client_dir"
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/pip-wrapper.sh" -o "$client_dir/pip-wrapper.sh"
+  curl -fsSL "$PKGRELAY_URL/bootstrap/client/conda-wrapper.sh" -o "$client_dir/conda-wrapper.sh"
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/cache-sync.sh" -o "$client_dir/cache-sync.sh"
   printf 'PKGRELAY_URL=%q\nPKGRELAY_CLIENT_DIR=%q\n' "$PKGRELAY_URL" "$client_dir" > "$client_dir/client.conf"
   chmod 0755 "$client_dir/cache-sync.sh"
@@ -78,6 +79,10 @@ install_client() {
 # >>> pkgrelay pip wrapper >>>
 [[ -r "$client_dir/pip-wrapper.sh" ]] && source "$client_dir/pip-wrapper.sh"
 # <<< pkgrelay pip wrapper <<<
+
+# >>> pkgrelay conda wrapper >>>
+[[ -r "$client_dir/conda-wrapper.sh" ]] && source "$client_dir/conda-wrapper.sh"
+# <<< pkgrelay conda wrapper <<<
 EOF
   install_conda_config
   ok "Installed."

@@ -75,6 +75,7 @@ def _conda_client_config(settings: Settings, cache_url: str) -> str:
     lines = ["channels:"]
     lines.extend(f"  - {name}" for name in channels)
     lines.append(f"channel_priority: {settings.client_conda_channel_priority}")
+    lines.append("always_copy: true")
     lines.append("default_channels:")
     lines.extend(f"  - {base}/{name}" for name in defaults)
     lines.append("custom_channels:")
@@ -184,7 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 media_type="text/plain",
                 headers={"Cache-Control": "no-store"},
             )
-        allowed = {"pip-wrapper.sh", "cache-sync.sh"}
+        allowed = {"pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh"}
         if name not in allowed:
             raise HTTPException(status_code=404, detail="Unknown client file")
         return Response(

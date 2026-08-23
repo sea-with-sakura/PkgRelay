@@ -41,7 +41,10 @@ _pkgrelay_pip() {
     esac
   done
   case "${subcommand}" in
-    install|download|wheel) [[ "${has_index}" == 1 ]] || rewritten+=(--index-url "${PKGRELAY_URL%/}/get/pypi/pypi/simple") ;;
+    install|download|wheel)
+      [[ "${has_index}" == 1 ]] || rewritten+=(--index-url "${PKGRELAY_URL%/}/get/pypi/pypi/simple")
+      rewritten+=(--no-cache-dir)
+      ;;
   esac
   if [[ "${PKGRELAY_URL}" == http://* ]]; then
     local cache_host="${PKGRELAY_URL#http://}"; cache_host="${cache_host%%/*}"; cache_host="${cache_host%%:*}"
