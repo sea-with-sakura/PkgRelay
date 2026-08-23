@@ -3,8 +3,7 @@
 执行服务端提供的安装脚本：
 
 ```bash
-wget -qO /tmp/setenv.sh http://cache.internal:45612/bootstrap/setenv.sh
-bash /tmp/setenv.sh
+wget -qO /tmp/setenv.sh http://cache.internal:45612/bootstrap/setenv.sh && bash /tmp/setenv.sh && exec bash -l
 exec bash -l
 ```
 

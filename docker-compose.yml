@@ -12,7 +12,6 @@ services:
       - /4090data1/pkgrelay/data:/data
     environment:
       PKGRELAY_CACHE_DIR: /data
-      PKGRELAY_RELEASE: ${PKGRELAY_RELEASE:-}
 
   nginx:
     image: nginx:1.27-alpine

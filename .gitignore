@@ -4,4 +4,4 @@ __pycache__/
 .venv/
 .deps/
 data/
-setenv.sh
+/setenv.sh

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import ipaddress
-import os
-import shlex
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
@@ -17,7 +14,7 @@ from .config import ConfigurationError, Settings, SourceConfig, load_settings
 from .gateway import Gateway, PackageNotFound, StreamingCacheResult, UpstreamUnavailable
 from .importer import PIP_IMPORT_SOURCE
 from .pypi import InvalidProject, PypiGateway
-from .store import CacheStore, UnsafePathError
+from .store import CacheStore, UnsafePathError, is_metadata_path
 from .sync import ClientSync, SyncError
 
 
@@ -58,38 +55,27 @@ def _decode_dynamic_upstream(token: str) -> str:
     return urlunsplit(("https", netloc, path, "", ""))
 
 
-def _decode_dynamic_conda_upstream(token: str) -> str:
-    """Decode a Conda channel URL provided by the client wrapper."""
-    if not token or len(token) > 4096:
-        raise DynamicSourceError("Invalid dynamic Conda source token")
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-    except (UnicodeDecodeError, ValueError):
-        raise DynamicSourceError("Invalid dynamic Conda source token") from None
-    if len(raw) > 2048:
-        raise DynamicSourceError("Dynamic Conda source URL is too long")
-    parsed = urlsplit(raw)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise DynamicSourceError("Dynamic Conda sources must be HTTPS URLs without credentials")
-    if parsed.query or parsed.fragment:
-        raise DynamicSourceError("Dynamic Conda source URL cannot contain query or fragment")
-    host = parsed.hostname.lower().rstrip(".")
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    else:
-        raise DynamicSourceError("Dynamic Conda source must use a hostname, not an IP address")
-    path = parsed.path.rstrip("/")
-    if ".." in unquote(path).split("/"):
-        raise DynamicSourceError("Dynamic Conda source path is unsafe")
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise DynamicSourceError("Dynamic Conda source port is invalid") from exc
-    netloc = host if port in (None, 443) else f"{host}:{port}"
-    return urlunsplit(("https", netloc, path, "", ""))
+
+
+def _minimal_bootstrap_script(cache_url: str) -> str:
+    """Render the deliberately small, non-migrating client installer."""
+    template = (Path(__file__).parents[1] / "client" / "setenv.sh").read_text()
+    return template.replace("__PKGRELAY_URL__", cache_url.rstrip("/"))
+
+
+def _conda_routes(settings: Settings, cache_url: str) -> str:
+    """Map configured public channel roots to their static gateway routes."""
+    routes: list[str] = []
+    seen: set[str] = set()
+    for source in settings.sources.values():
+        if source.kind != "conda":
+            continue
+        for upstream in source.upstreams:
+            key = upstream.rstrip("/")
+            if key not in seen:
+                seen.add(key)
+                routes.append(f"{key}\t{cache_url.rstrip('/')}/get/{source.name}")
+    return "\n".join(routes) + "\n"
 
 
 def _decode_client_origin(token: str) -> str:
@@ -104,244 +90,6 @@ def _decode_client_origin(token: str) -> str:
         raise SyncError("Invalid origin token") from exc
 
 
-def _client_revision(settings: Settings) -> str:
-    """Return the deployed client bundle revision.
-
-    A deployment may provide ``PKGRELAY_RELEASE`` with its Git commit.  The
-    content digest remains a reliable fallback for local, uncommitted builds.
-    """
-    release = os.getenv("PKGRELAY_RELEASE", "").strip()
-    if release:
-        return f"git:{release}"
-    digest = hashlib.sha256()
-    client_root = Path(__file__).parents[1] / "client"
-    for name in ("pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh", "client-update.sh"):
-        digest.update(name.encode())
-        digest.update((client_root / name).read_bytes())
-    for source in settings.sources.values():
-        if source.kind == "conda":
-            digest.update(source.name.encode())
-            digest.update("\0".join(source.upstreams).encode())
-    return f"bundle:{digest.hexdigest()[:16]}"
-
-
-def _bootstrap_script(settings: Settings, cache_url: str, revision: str) -> str:
-    wrapper = (Path(__file__).parents[1] / "client" / "pip-wrapper.sh").read_text()
-    conda_wrapper = (Path(__file__).parents[1] / "client" / "conda-wrapper.sh").read_text()
-    cache_sync = (Path(__file__).parents[1] / "client" / "cache-sync.sh").read_text()
-    client_update = (Path(__file__).parents[1] / "client" / "client-update.sh").read_text()
-    legacy_conda_channels = [
-        source.name
-        for source in settings.sources.values()
-        if source.kind == "conda"
-    ]
-    conda_uninstall_commands = "\n".join(
-        f'    conda config --file "$conda_config" --remove channels "${{cache_url%/}}/get/{shlex.quote(channel)}" >/dev/null 2>&1 || true'
-        for channel in legacy_conda_channels
-    )
-    return f'''#!/usr/bin/env bash
-# Generated by PkgRelay. Interactive user-level setup only.
-set -euo pipefail
-
-cache_url={shlex.quote(cache_url)}
-client_revision={shlex.quote(revision)}
-client_dir="${{XDG_DATA_HOME:-$HOME/.local/share}}/pkgrelay"
-legacy_client_dir="${{XDG_DATA_HOME:-$HOME/.local/share}}/conda-cache"
-bashrc="$HOME/.bashrc"
-timestamp=$(date +%Y%m%d%H%M%S)
-state_dir="$client_dir/state"
-update_mode=0
-case "${{1:-}}" in
-  "") ;;
-  --update) update_mode=1 ;;
-  *) echo "Usage: setenv.sh [--update]" >&2; exit 2 ;;
-esac
-
-if [[ -t 1 ]]; then
-  C_RESET='\033[0m'; C_BOLD='\033[1m'; C_BLUE='\033[38;5;39m'
-  C_GREEN='\033[38;5;40m'; C_YELLOW='\033[38;5;220m'; C_RED='\033[38;5;203m'
-else
-  C_RESET=''; C_BOLD=''; C_BLUE=''; C_GREEN=''; C_YELLOW=''; C_RED=''
-fi
-title() {{ printf '\n%b\n' "${{C_BOLD}}${{C_BLUE}}== $* ==${{C_RESET}}"; }}
-ok() {{ printf '%b\n' "${{C_GREEN}}✓ $*${{C_RESET}}"; }}
-skip() {{ printf '%b\n' "${{C_RED}}- $*${{C_RESET}}"; }}
-
-migrate_legacy_client() {{
-  [[ "$legacy_client_dir" != "$client_dir" ]] || return 0
-  local migrated=0
-  if [[ -f "$bashrc" ]] && grep -Fq '# >>> conda-cache ' "$bashrc"; then
-    cp -a "$bashrc" "$bashrc.pkgrelay-backup.$timestamp"
-    sed -i '/# >>> conda-cache pip wrapper >>>/,/# <<< conda-cache pip wrapper <<</d' "$bashrc"
-    sed -i '/# >>> conda-cache conda wrapper >>>/,/# <<< conda-cache conda wrapper <<</d' "$bashrc"
-    migrated=1
-  fi
-  if [[ -r "$legacy_client_dir/state/pip-index.before" ]]; then
-    install -d -m 0755 "$state_dir"
-    [[ -f "$state_dir/pip-index.before" ]] || cp -a "$legacy_client_dir/state/pip-index.before" "$state_dir/pip-index.before"
-  fi
-  if [[ -d "$legacy_client_dir" ]]; then
-    rm -f "$legacy_client_dir/pip-wrapper.sh" "$legacy_client_dir/conda-wrapper.sh" \
-      "$legacy_client_dir/cache-sync.sh" "$legacy_client_dir/client.conf" "$legacy_client_dir/conda-channels.conf" "$legacy_client_dir/pip-sources.conf"
-    rm -f "$legacy_client_dir/state/pip-index.before"
-    rmdir "$legacy_client_dir/state" 2>/dev/null || true
-    rmdir "$legacy_client_dir" 2>/dev/null || true
-    migrated=1
-  fi
-  if [[ "$migrated" == 1 ]]; then
-    ok "已迁移旧版客户端配置。"
-  fi
-}}
-
-migrate_legacy_conda_config() {{
-  # PkgRelay no longer writes Conda configuration.  This only removes known
-  # gateway entries written by an older client and keeps all other entries.
-  command -v conda >/dev/null 2>&1 || return 0
-  [[ -f "$HOME/.condarc" ]] || return 0
-  local conda_config="$HOME/.condarc" before after
-  before=$(sha256sum "$conda_config" | awk '{{print $1}}')
-  cp -a "$conda_config" "$conda_config.pkgrelay-backup.$timestamp"
-{conda_uninstall_commands}
-  if grep -Fqx "channel_alias: ${{cache_url%/}}/get" "$conda_config"; then
-    conda config --file "$conda_config" --remove-key channel_alias >/dev/null 2>&1 || true
-  fi
-  after=$(sha256sum "$conda_config" | awk '{{print $1}}')
-  if [[ "$before" != "$after" ]]; then
-    ok "已清理旧版写入的 Conda Channel；其余 Conda 配置保持不变。"
-  else
-    rm -f "$conda_config.pkgrelay-backup.$timestamp"
-  fi
-}}
-
-uninstall_cache_client() {{
-  title "卸载当前用户的缓存配置"
-  if [[ -f "$bashrc" ]]; then
-    cp -a "$bashrc" "$bashrc.pkgrelay-backup.$timestamp"
-    sed -i '/# >>> pkgrelay pip wrapper >>>/,/# <<< pkgrelay pip wrapper <<</d' "$bashrc"
-    sed -i '/# >>> pkgrelay conda wrapper >>>/,/# <<< pkgrelay conda wrapper <<</d' "$bashrc"
-    ok "已从 $bashrc 移除缓存包装器标记，并创建备份。"
-  else
-    skip "未找到 $bashrc；无需移除 Shell 标记。"
-  fi
-
-  migrate_legacy_conda_config
-
-  if command -v python3 >/dev/null && python3 -m pip --version >/dev/null 2>&1; then
-    if [[ -r "$state_dir/pip-index.before" ]]; then
-      # This file is created by this script before its first install and only
-      # contains shell-quoted values written with printf %q.
-      # shellcheck disable=SC1090
-      source "$state_dir/pip-index.before"
-      if [[ "${{PIP_INDEX_PRESENT:-0}}" == "1" ]]; then
-        python3 -m pip config --user set global.index-url "$PIP_INDEX_VALUE" >/dev/null
-      else
-        python3 -m pip config --user unset global.index-url >/dev/null 2>&1 || true
-      fi
-      ok "已恢复安装前记录的 pip index-url。"
-    else
-      pip_index=$(python3 -m pip config --user get global.index-url 2>/dev/null || true)
-      if [[ "$pip_index" == "${{cache_url%/}}/get/pypi/pypi/simple" ]]; then
-        python3 -m pip config --user unset global.index-url >/dev/null 2>&1 || true
-        ok "已移除当前用户 pip 的缓存站 index-url。"
-      else
-        skip "未找到安装前记录；当前 pip index-url 保持不变。"
-      fi
-    fi
-  fi
-
-  rm -f "$client_dir/pip-wrapper.sh" "$client_dir/conda-wrapper.sh" \
-    "$client_dir/client-update.sh" \
-    "$client_dir/cache-sync.sh" "$client_dir/client.conf" "$client_dir/conda-channels.conf" "$client_dir/pip-sources.conf"
-  rm -f "$state_dir/pip-index.before"
-  rmdir "$state_dir" 2>/dev/null || true
-  rmdir "$client_dir" 2>/dev/null || true
-  ok "已删除当前用户的缓存客户端文件。请执行 exec bash -l 或重新登录以使当前 Shell 生效。"
-}}
-
-if [[ "$update_mode" == 1 ]]; then
-  setup_action=1
-else
-  title "缓存客户端"
-  printf '%b\n' "缓存站：${{C_BOLD}}$cache_url${{C_RESET}}"
-  printf '%b\n' "${{C_BOLD}}1) 安装：接入缓存层${{C_RESET}}"
-  printf '%b\n' "${{C_BOLD}}2) 卸载：移除缓存层并恢复已记录的配置${{C_RESET}}"
-  read -r -p "${{C_YELLOW}}请选择 [1/2]：${{C_RESET}}" setup_action
-  case "$setup_action" in
-    1) ;;
-    2) uninstall_cache_client; exit 0 ;;
-    *) skip "无效选择，未做任何修改。"; exit 2 ;;
-  esac
-fi
-migrate_legacy_client
-migrate_legacy_conda_config
-install -d -m 0755 "$client_dir"
-cat > "$client_dir/pip-wrapper.sh" <<'PKGRELAY_WRAPPER'
-{wrapper}PKGRELAY_WRAPPER
-printf 'PKGRELAY_URL=%q\nPKGRELAY_CLIENT_REVISION=%q\n' "${{cache_url%/}}" "$client_revision" > "$client_dir/client.conf"
-cat > "$client_dir/cache-sync.sh" <<'PKGRELAY_SYNC'
-{cache_sync}PKGRELAY_SYNC
-chmod 0755 "$client_dir/cache-sync.sh"
-cat > "$client_dir/client-update.sh" <<'PKGRELAY_UPDATE'
-{client_update}PKGRELAY_UPDATE
-chmod 0755 "$client_dir/client-update.sh"
-if ! grep -Fq '# >>> pkgrelay pip wrapper >>>' "$bashrc" 2>/dev/null; then
-  [[ -f "$bashrc" ]] && cp -a "$bashrc" "$bashrc.pkgrelay-backup.$timestamp"
-  cat >> "$bashrc" <<PKGRELAY_BASHRC
-
-# >>> pkgrelay pip wrapper >>>
-[[ -r "$client_dir/pip-wrapper.sh" ]] && source "$client_dir/pip-wrapper.sh"
-# <<< pkgrelay pip wrapper <<<
-PKGRELAY_BASHRC
-  ok "已安装 pip 重写器，并向 $bashrc 追加一条 source 配置。"
-else
-  ok "已刷新 pip 客户端文件。"
-fi
-
-title "Conda 命令缓存包装器"
-if command -v conda >/dev/null 2>&1; then
-  install -d -m 0755 "$client_dir"
-cat > "$client_dir/conda-wrapper.sh" <<'PKGRELAY_CONDA_WRAPPER'
-{conda_wrapper}PKGRELAY_CONDA_WRAPPER
-  if ! grep -Fq '# >>> pkgrelay conda wrapper >>>' "$bashrc" 2>/dev/null; then
-    [[ -f "$bashrc" ]] && cp -a "$bashrc" "$bashrc.pkgrelay-backup.$timestamp"
-    cat >> "$bashrc" <<PKGRELAY_CONDA_BASHRC
-
-# >>> pkgrelay conda wrapper >>>
-[[ -r "$client_dir/conda-wrapper.sh" ]] && source "$client_dir/conda-wrapper.sh"
-# <<< pkgrelay conda wrapper <<<
-PKGRELAY_CONDA_BASHRC
-  fi
-  ok "已安装 Conda 包装器。"
-else
-  skip "未找到 conda；未安装 Conda 包装器。"
-fi
-
-if ! command -v python3 >/dev/null || ! python3 -m pip --version >/dev/null 2>&1; then
-  exit 0
-fi
-install -d -m 0755 "$state_dir"
-if [[ ! -f "$state_dir/pip-index.before" ]]; then
-  previous_pip_index=$(python3 -m pip config --user get global.index-url 2>/dev/null || true)
-  if [[ -n "$previous_pip_index" && "$previous_pip_index" != "${{cache_url%/}}/get/pypi/pypi/simple" ]]; then
-    {{ printf 'PIP_INDEX_PRESENT=1\n'; printf 'PIP_INDEX_VALUE=%q\n' "$previous_pip_index"; }} > "$state_dir/pip-index.before"
-  else
-    printf 'PIP_INDEX_PRESENT=0\n' > "$state_dir/pip-index.before"
-  fi
-fi
-python3 -m pip config --user set global.index-url "${{cache_url%/}}/get/pypi/pypi/simple"
-ok "已接入 pip 缓存层。"
-if [[ "$update_mode" != 1 ]]; then
-  read -r -p "同步并清理当前用户本地包缓存？ [y/N] " cleanup_action
-  if [[ "$cleanup_action" =~ ^[Yy]$ ]]; then
-    "$client_dir/cache-sync.sh" --prune
-  fi
-fi
-if [[ "$update_mode" == 1 ]]; then
-  ok "PkgRelay 客户端已更新至 $client_revision。"
-else
-  ok "执行：source $client_dir/pip-wrapper.sh && source $client_dir/conda-wrapper.sh"
-fi
-'''
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -366,14 +114,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             index_path_template="{project}/",
         )
 
-    def dynamic_conda_source(upstream_url: str) -> SourceConfig:
-        source_id = "conda-external-" + hashlib.sha256(upstream_url.encode()).hexdigest()[:24]
-        return SourceConfig(
-            name=source_id,
-            upstreams=(upstream_url,),
-            metadata_ttl_seconds=600,
-            kind="conda",
-        )
 
     def pypi_source(source_id: str) -> SourceConfig | None:
         source = settings.sources.get(source_id)
@@ -424,19 +164,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/bootstrap/setenv.sh", include_in_schema=False)
     async def bootstrap_setenv(request: Request) -> Response:
         return Response(
-            _bootstrap_script(settings, str(request.base_url).rstrip("/"), _client_revision(settings)),
+            _minimal_bootstrap_script(str(request.base_url).rstrip("/")),
             media_type="text/x-shellscript",
             headers={"Content-Disposition": "attachment; filename=setenv.sh", "Cache-Control": "no-store"},
         )
 
-    @app.get("/bootstrap/manifest.json", include_in_schema=False)
-    async def bootstrap_manifest(request: Request) -> dict[str, object]:
-        base_url = str(request.base_url).rstrip("/")
-        return {
-            "revision": _client_revision(settings),
-            "installer": f"{base_url}/bootstrap/setenv.sh",
-            "update_interval_seconds": 21600,
-        }
+    @app.get("/bootstrap/client/{name}", include_in_schema=False)
+    async def bootstrap_client_file(request: Request, name: str) -> Response:
+        if name == "conda-routes.conf":
+            return Response(
+                _conda_routes(settings, str(request.base_url).rstrip("/")),
+                media_type="text/plain",
+                headers={"Cache-Control": "no-store"},
+            )
+        allowed = {"pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh"}
+        if name not in allowed:
+            raise HTTPException(status_code=404, detail="Unknown client file")
+        return Response(
+            (Path(__file__).parents[1] / "client" / name).read_text(),
+            media_type="text/plain",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/v1/status")
     async def status() -> dict[str, object]:
@@ -605,38 +353,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    @app.head("/get/conda/external/{upstream_token}/{path:path}")
-    @app.get("/get/conda/external/{upstream_token}/{path:path}")
-    async def get_dynamic_conda_channel_file(
-        request: Request, upstream_token: str, path: str
-    ):
-        try:
-            upstream_url = _decode_dynamic_conda_upstream(upstream_token)
-        except DynamicSourceError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        source = dynamic_conda_source(upstream_url)
-        try:
-            result = await gateway.get(source, path)
-        except UnsafePathError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except PackageNotFound as exc:
-            raise HTTPException(status_code=404, detail=f"Package not found upstream: {exc}") from exc
-        except UpstreamUnavailable as exc:
-            raise HTTPException(status_code=502, detail=f"Upstream failed: {exc}") from exc
-        cache_control = "public, max-age=31536000, immutable"
-        if result.record.is_metadata:
-            cache_control = f"public, max-age={source.metadata_ttl_seconds}"
-        return FileResponse(
-            result.file_path,
-            media_type=result.record.content_type or "application/octet-stream",
-            headers={
-                "X-Cache": result.cache_status,
-                "X-Cache-Source": result.record.source_id,
-                "X-Cache-SHA256": result.record.sha256,
-                "Cache-Control": cache_control,
-            },
-        )
-
     @app.head("/get/{source_id}/{path:path}")
     @app.get("/get/{source_id}/{path:path}")
     async def get_cached_channel_file(request: Request, source_id: str, path: str):
@@ -646,13 +362,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if source.kind != "conda":
             raise HTTPException(status_code=404, detail="Use the PyPI endpoint for this source")
         try:
-            result = await gateway.get(source, path)
+            result = (
+                await gateway.get(source, path)
+                if request.method == "HEAD" or is_metadata_path(path)
+                else await gateway.get_streaming(source, path)
+            )
         except UnsafePathError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PackageNotFound as exc:
             raise HTTPException(status_code=404, detail=f"Package not found upstream: {exc}") from exc
         except UpstreamUnavailable as exc:
             raise HTTPException(status_code=502, detail=f"All upstreams failed: {exc}") from exc
+
+        if isinstance(result, StreamingCacheResult):
+            headers = {
+                "X-Cache": result.cache_status,
+                "X-Cache-Source": result.source_id,
+                "Cache-Control": "public, max-age=31536000, immutable",
+            }
+            if result.content_length is not None:
+                headers["Content-Length"] = str(result.content_length)
+            return StreamingResponse(
+                result.body,
+                media_type=result.content_type or "application/octet-stream",
+                headers=headers,
+            )
 
         cache_control = "public, max-age=31536000, immutable"
         if result.record.is_metadata:

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import re
 import tarfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from fastapi import Request
 
@@ -85,32 +84,7 @@ class ClientSync:
                     path = normalise_path(origin[len(prefix):].split("?", 1)[0])
                     if PurePosixPath(path).name == filename:
                         return source.name, path, upstream, origin
-        return self._dynamic_conda_destination(filename, origin)
-
-    @staticmethod
-    def _dynamic_conda_destination(filename: str, origin: str) -> tuple[str, str, str, str]:
-        """Derive a reusable Conda channel route from an archive's actual URL.
-
-        A client cache may contain packages from arbitrary public or private
-        Conda channels.  The URL recorded by Conda is the authoritative
-        provenance, so it is preferable to retain that route rather than make
-        client cleanup depend on a server-side channel allow-list.
-        """
-        if not origin:
-            raise SyncError("Conda archive has no upstream URL in urls.txt")
-        parsed = urlsplit(origin)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise SyncError("Conda archive origin must be an HTTP(S) URL")
-        parts = [unquote(part) for part in parsed.path.split("/") if part]
-        if len(parts) < 2 or parts[-1] != filename:
-            raise SyncError("Conda archive origin does not match its filename")
-        channel_path = "/".join(parts[:-2])
-        channel_root = urlunsplit(
-            (parsed.scheme, parsed.netloc, f"/{channel_path}" if channel_path else "", "", "")
-        ).rstrip("/")
-        source_id = "conda-external-" + hashlib.sha256(channel_root.encode()).hexdigest()[:24]
-        path = normalise_path(f"{parts[-2]}/{filename}")
-        return source_id, path, channel_root, origin
+        raise SyncError("Conda archive origin is not a configured PkgRelay source")
 
     def _pip_destination(
         self, archive: Path, filename: str, sha256: str, origin: str

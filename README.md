@@ -35,9 +35,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 显式的 HTTPS `--index-url` 会自动转向 PkgRelay。首次下载时网关边回源、边传输、边写入缓存；后续请求命中中央缓存。
 
-客户端会在使用 `pip` 或 Conda 包操作时每 6 小时检查一次服务端版本；有更新时仅刷新 PkgRelay 自己管理的客户端文件，不修改用户环境。
-
-Conda 的 Channel 配置、优先级和命令行 `-c` 均由 Conda 原样决定。客户端不会新增或写入 Conda Channel，只会在单次包操作中把 Conda 已选定的 Channel 临时映射到缓存站。
+Conda 的 Channel 配置、优先级和命令行 `-c` 均由 Conda 原样决定。客户端不写入 Conda 或 pip 配置；仅在单次包操作中把已知公共 Conda Channel 临时映射到缓存站。中转站优先使用清华 TUNA 镜像，失败时回退官方源；私有或未知 Conda Channel 保持直连。
 
 需要同步并清理当前用户下载缓存时：
 
@@ -55,3 +53,14 @@ Conda 的 Channel 配置、优先级和命令行 `-c` 均由 Conda 原样决定�
 ```
 
 可加 `--dry-run` 预览。生产环境建议使用 TLS，并只向可信内网开放端口。
+
+## 重置旧缓存
+
+本次架构不迁移旧的动态 Conda 路由。确认不再需要旧缓存后，在服务端执行：
+
+```bash
+./reset-cache.sh --yes
+./rebuild.sh
+```
+
+该脚本只删除宿主机 `/4090data1/pkgrelay/data` 内的缓存和数据库。

@@ -8,26 +8,40 @@ client_sync:
   max_upload_bytes: 21474836480
 
 sources:
-  defaults:
+  defaults-main:
     upstreams:
+      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
       - https://repo.anaconda.com/pkgs/main
+    metadata_ttl_seconds: 600
+    fallback_on_not_found: true
+
+  defaults-r:
+    upstreams:
+      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
       - https://repo.anaconda.com/pkgs/r
     metadata_ttl_seconds: 600
+    fallback_on_not_found: true
 
   conda-forge:
     upstreams:
+      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
       - https://conda.anaconda.org/conda-forge
     metadata_ttl_seconds: 600
+    fallback_on_not_found: true
 
   pytorch:
     upstreams:
+      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch
       - https://conda.anaconda.org/pytorch
     metadata_ttl_seconds: 600
+    fallback_on_not_found: true
 
   nvidia:
     upstreams:
+      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/nvidia
       - https://conda.anaconda.org/nvidia
     metadata_ttl_seconds: 600
+    fallback_on_not_found: true
 
   pypi:
     kind: pypi

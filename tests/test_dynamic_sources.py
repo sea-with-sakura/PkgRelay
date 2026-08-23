@@ -2,9 +2,8 @@ import base64
 
 import pytest
 
-from app.main import DynamicSourceError, _decode_dynamic_conda_upstream, _decode_dynamic_upstream
+from app.main import DynamicSourceError, _decode_dynamic_upstream
 from app.store import CacheStore
-from app.sync import ClientSync
 
 
 def token(url: str) -> str:
@@ -23,17 +22,6 @@ def test_dynamic_source_decodes_and_normalises_an_https_url():
 def test_dynamic_source_rejects_http_urls():
     with pytest.raises(DynamicSourceError):
         _decode_dynamic_upstream(token("http://pypi.org/simple"))
-
-
-def test_dynamic_conda_source_decodes_and_normalises_an_https_url():
-    assert _decode_dynamic_conda_upstream(
-        token("https://CONDA.ANACONDA.ORG/conda-forge/"),
-    ) == "https://conda.anaconda.org/conda-forge"
-
-
-def test_dynamic_conda_source_rejects_an_ip_address():
-    with pytest.raises(DynamicSourceError):
-        _decode_dynamic_conda_upstream(token("https://172.16.8.1/conda"))
 
 
 def test_dynamic_sources_are_persisted_by_canonical_upstream(tmp_path):
@@ -69,15 +57,3 @@ def test_identical_artifacts_share_one_content_addressed_blob(tmp_path):
     assert store.statistics()["blob_count"] == 1
     assert store.statistics()["total_bytes"] == len(b"same-wheel")
     store.close()
-
-
-def test_conda_sync_derives_an_unconfigured_channel_from_archive_url():
-    source_id, path, upstream, final_url = ClientSync._dynamic_conda_destination(
-        "demo-1.0-0.conda",
-        "https://packages.example.test/conda/label/stable/linux-64/demo-1.0-0.conda",
-    )
-
-    assert source_id.startswith("conda-external-")
-    assert path == "linux-64/demo-1.0-0.conda"
-    assert upstream == "https://packages.example.test/conda/label/stable"
-    assert final_url.endswith("/linux-64/demo-1.0-0.conda")

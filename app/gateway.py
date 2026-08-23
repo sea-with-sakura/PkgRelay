@@ -152,6 +152,51 @@ class Gateway:
             lock.release()
             raise
 
+    async def get_streaming(
+        self, source: SourceConfig, requested_path: str
+    ) -> CacheResult | StreamingCacheResult:
+        """Stream an uncached Conda package while publishing it to the cache.
+
+        Metadata intentionally continues through :meth:`get`, where the full
+        response is needed for conditional revalidation.  Package archives do
+        not need that delay, so a cold request receives bytes immediately.
+        """
+        path = normalise_path(requested_path)
+        target = self.store.file_path(source.name, path)
+        record = self.store.get(source.name, path)
+        if target.is_file() and record:
+            self.store.touch(source.name, path)
+            return CacheResult(target, self.store.get(source.name, path), "HIT")  # type: ignore[arg-type]
+
+        lock = await self._lock_for(source.name, path)
+        await lock.acquire()
+        try:
+            record = self.store.get(source.name, path)
+            target = self.store.file_path(source.name, path)
+            if target.is_file() and record:
+                self.store.touch(source.name, path)
+                return CacheResult(target, self.store.get(source.name, path), "HIT")  # type: ignore[arg-type]
+            urls = tuple((urljoin(f"{upstream}/", path), upstream) for upstream in source.upstreams)
+            reused = self._reuse_by_url(source, path, False, urls)
+            if reused:
+                return reused
+            failures: list[str] = []
+            for upstream_url, upstream in urls:
+                try:
+                    return await self._open_stream(source, path, upstream_url, lock)
+                except PackageNotFound:
+                    if not source.fallback_on_not_found:
+                        raise
+                    failures.append(f"{upstream}: HTTP 404")
+                except UpstreamUnavailable as exc:
+                    failures.append(str(exc))
+            if failures and all(item.endswith("HTTP 404") for item in failures):
+                raise PackageNotFound(path)
+            raise UpstreamUnavailable("; ".join(failures) or "No upstream was reachable")
+        except BaseException:
+            lock.release()
+            raise
+
     async def _open_stream(
         self, source: SourceConfig, path: str, upstream_url: str, lock: asyncio.Lock
     ) -> StreamingCacheResult:
