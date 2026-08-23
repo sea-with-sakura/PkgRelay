@@ -33,6 +33,8 @@ class Settings:
     import_roots: tuple[Path, ...]
     client_sync_enabled: bool = False
     client_sync_max_upload_bytes: int = 20 * 1024 * 1024 * 1024
+    client_conda_channels: tuple[str, ...] = ()
+    client_conda_channel_priority: str = "strict"
 
     @property
     def database_path(self) -> Path:
@@ -125,10 +127,34 @@ def load_settings(path: str | Path | None = None) -> Settings:
             index_path_template=index_path_template,
         )
 
+    client_conda = raw.get("client_conda", {})
+    if not isinstance(client_conda, dict):
+        raise ConfigurationError("client_conda must be a mapping")
+    default_client_channels = [
+        source.name for source in sources.values()
+        if source.kind == "conda" and source.name not in {"defaults-main", "defaults-r"}
+    ]
+    if "defaults-main" in sources and "defaults-r" in sources:
+        default_client_channels.append("defaults")
+    client_channels = client_conda.get("channels", default_client_channels)
+    if (
+        not isinstance(client_channels, list)
+        or not client_channels
+        or not all(isinstance(channel, str) and channel for channel in client_channels)
+    ):
+        raise ConfigurationError("client_conda.channels must be a non-empty list of channel names")
+    if any(channel != "defaults" and channel not in sources for channel in client_channels):
+        raise ConfigurationError("client_conda.channels contains an unknown configured source")
+    channel_priority = client_conda.get("channel_priority", "strict")
+    if channel_priority not in {"strict", "flexible", "disabled"}:
+        raise ConfigurationError("client_conda.channel_priority must be strict, flexible or disabled")
+
     return Settings(
         cache_dir=cache_dir,
         sources=sources,
         import_roots=import_roots,
         client_sync_enabled=client_sync_enabled,
         client_sync_max_upload_bytes=client_sync_max_upload_bytes,
+        client_conda_channels=tuple(client_channels),
+        client_conda_channel_priority=channel_priority,
     )

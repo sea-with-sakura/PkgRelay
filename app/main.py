@@ -63,19 +63,23 @@ def _minimal_bootstrap_script(cache_url: str) -> str:
     return template.replace("__PKGRELAY_URL__", cache_url.rstrip("/"))
 
 
-def _conda_routes(settings: Settings, cache_url: str) -> str:
-    """Map configured public channel roots to their static gateway routes."""
-    routes: list[str] = []
-    seen: set[str] = set()
-    for source in settings.sources.values():
-        if source.kind != "conda":
-            continue
-        for upstream in source.upstreams:
-            key = upstream.rstrip("/")
-            if key not in seen:
-                seen.add(key)
-                routes.append(f"{key}\t{cache_url.rstrip('/')}/get/{source.name}")
-    return "\n".join(routes) + "\n"
+def _conda_client_config(settings: Settings, cache_url: str) -> str:
+    """Render the user-level Conda settings owned by PkgRelay."""
+    base = f"{cache_url.rstrip('/')}/get"
+    defaults = [name for name in ("defaults-main", "defaults-r") if name in settings.sources]
+    channels = list(settings.client_conda_channels)
+    custom = [
+        source.name for source in settings.sources.values()
+        if source.kind == "conda" and source.name not in {"defaults-main", "defaults-r"}
+    ]
+    lines = ["channels:"]
+    lines.extend(f"  - {name}" for name in channels)
+    lines.append(f"channel_priority: {settings.client_conda_channel_priority}")
+    lines.append("default_channels:")
+    lines.extend(f"  - {base}/{name}" for name in defaults)
+    lines.append("custom_channels:")
+    lines.extend(f"  {name}: {base}" for name in custom)
+    return "\n".join(lines) + "\n"
 
 
 def _decode_client_origin(token: str) -> str:
@@ -171,13 +175,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/bootstrap/client/{name}", include_in_schema=False)
     async def bootstrap_client_file(request: Request, name: str) -> Response:
-        if name == "conda-routes.conf":
+        if name == "condarc.yaml":
             return Response(
-                _conda_routes(settings, str(request.base_url).rstrip("/")),
+                _conda_client_config(settings, str(request.base_url).rstrip("/")),
                 media_type="text/plain",
                 headers={"Cache-Control": "no-store"},
             )
-        allowed = {"pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh"}
+        allowed = {"pip-wrapper.sh", "cache-sync.sh"}
         if name not in allowed:
             raise HTTPException(status_code=404, detail="Unknown client file")
         return Response(

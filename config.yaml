@@ -7,6 +7,11 @@ client_sync:
   enabled: true
   max_upload_bytes: 21474836480
 
+# The gateway owns every installed client's Conda configuration.
+client_conda:
+  channels: [conda-forge, pytorch, nvidia, defaults]
+  channel_priority: strict
+
 sources:
   defaults-main:
     upstreams:

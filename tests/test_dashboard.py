@@ -14,6 +14,7 @@ def test_dashboard_and_status_are_available(tmp_path: Path):
             "conda-forge": SourceConfig("conda-forge", ("https://conda.anaconda.org/conda-forge",)),
             "pypi": SourceConfig("pypi", ("https://pypi.org",), kind="pypi"),
         },
+        client_conda_channels=("conda-forge",),
     )
     app = create_app(settings)
     app.state.store.store_bytes(
@@ -29,7 +30,7 @@ def test_dashboard_and_status_are_available(tmp_path: Path):
         artifacts = client.get("/api/v1/sources/conda-forge/artifacts?query=demo")
         pool_artifacts = client.get("/api/v1/pools/conda/artifacts?query=demo")
         bootstrap = client.get("/bootstrap/setenv.sh")
-        routes = client.get("/bootstrap/client/conda-routes.conf")
+        routes = client.get("/bootstrap/client/condarc.yaml")
 
     assert dashboard.status_code == 200
     assert "PkgRelay" in dashboard.text
@@ -42,14 +43,12 @@ def test_dashboard_and_status_are_available(tmp_path: Path):
     assert bootstrap.status_code == 200
     assert "PkgRelay 缓存客户端" in bootstrap.text
     assert "PKGRELAY_URL" in bootstrap.text
-    assert "conda-wrapper.sh" in bootstrap.text
-    assert "安装：接入缓存层" in bootstrap.text
-    assert "卸载：移除缓存层" in bootstrap.text
-    assert "删除旧版 PkgRelay / conda-cache 客户端" in bootstrap.text
+    assert "由网关接管 Conda / pip 缓存" in bootstrap.text
     assert "pip config --user set" not in bootstrap.text
     assert "client-update.sh" not in bootstrap.text
     assert routes.status_code == 200
-    assert "https://conda.anaconda.org/conda-forge\thttp://testserver/get/conda-forge" in routes.text
+    assert "channels:\n  - conda-forge" in routes.text
+    assert "conda-forge: http://testserver/get" in routes.text
 
 
 def test_static_conda_channel_serves_a_cached_package(tmp_path: Path):

@@ -6,12 +6,16 @@ cache_dir: ./data
 client_sync:
   enabled: true
   max_upload_bytes: 21474836480
+# The gateway owns every installed client's Conda configuration.
+client_conda:
+  channels: [conda-forge, pytorch, nvidia, defaults]
+  channel_priority: strict
 # The web service never mounts user package directories. The host-side
 # import-cache.sh script supplies a temporary /imports/source allow-list.
 
 sources:
   # Canonical public Conda channels. TUNA is used first and the official
-  # channel is the fallback. Clients keep their own Conda configuration.
+  # channel is the fallback. Installed clients receive these via the gateway.
   defaults-main:
     upstreams:
       - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main

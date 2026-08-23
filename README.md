@@ -20,9 +20,7 @@ curl http://127.0.0.1:45612/healthz
 每台机器上的每个用户执行：
 
 ```bash
-wget -qO /tmp/setenv.sh http://172.16.8.251:45612/bootstrap/setenv.sh
-bash /tmp/setenv.sh
-exec bash -l
+wget -qO /tmp/setenv.sh http://172.16.8.251:45612/bootstrap/setenv.sh && bash /tmp/setenv.sh && exec bash -l
 ```
 
 之后照常使用：
@@ -35,7 +33,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 显式的 HTTPS `--index-url` 会自动转向 PkgRelay。首次下载时网关边回源、边传输、边写入缓存；后续请求命中中央缓存。
 
-Conda 的 Channel 配置、优先级和命令行 `-c` 均由 Conda 原样决定。客户端不写入 Conda 或 pip 配置；仅在单次包操作中把已知公共 Conda Channel 临时映射到缓存站。中转站优先使用清华 TUNA 镜像，失败时回退官方源；私有或未知 Conda Channel 保持直连。
+安装客户端后，网关会接管当前用户的 `~/.condarc`：Channel 列表、优先级和公共源均由网关下发，用户原有配置不参与 Conda 解析。原文件会备份；选择卸载即可原样恢复。中转站优先使用清华 TUNA 镜像，失败时回退官方源。
 
 需要同步并清理当前用户下载缓存时：
 
