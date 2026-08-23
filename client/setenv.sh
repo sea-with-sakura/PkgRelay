@@ -81,6 +81,16 @@ install_client() {
 EOF
   install_conda_config
   ok "已接入缓存层。"
+  if [[ -t 0 ]]; then
+    say "可选：同步当前用户已下载的 Conda / pip 归档到网关；同步时会显示扫描、检查、上传与清理进度。"
+    say "选择清理后，仅删除网关已确认保存的下载归档，不会删除任何环境或已安装包。"
+    read -r -p "现在同步并清理本地下载缓存？ [y/N] " sync_local_cache
+    if [[ "$sync_local_cache" =~ ^[Yy]$ ]]; then
+      if ! "$client_dir/cache-sync.sh" --prune; then
+        say "! 同步未完全成功；未确认的本地归档已保留，可稍后执行 cache-sync.sh --prune 重试。"
+      fi
+    fi
+  fi
   say "执行：exec bash -l"
 }
 

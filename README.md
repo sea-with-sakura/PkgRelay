@@ -35,11 +35,14 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 安装客户端后，网关会接管当前用户的 `~/.condarc`：Channel 列表、优先级和公共源均由网关下发，用户原有配置不参与 Conda 解析。原文件会备份；选择卸载即可原样恢复。中转站优先使用清华 TUNA 镜像，失败时回退官方源。
 
-需要同步并清理当前用户下载缓存时：
+需要手动同步当前用户下载缓存时：
 
 ```bash
+~/.local/share/pkgrelay/cache-sync.sh --sync   # 仅上传，不删除本地归档
 ~/.local/share/pkgrelay/cache-sync.sh --prune
 ```
+
+`--prune` 会先逐个确认或上传，再清理网关已存在或刚上传成功的本地下载归档；不会删除任何 Conda 环境或已安装的 pip 包。
 
 ## 导入已有缓存
 

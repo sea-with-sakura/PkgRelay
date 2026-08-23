@@ -28,26 +28,40 @@ trap 'rm -f "$tmp_reply"' EXIT
 synced=0
 present=0
 failed=0
+pruned=0
 conda_dirs=()
 pip_archives=()
 conda_archives=()
 total=0
 processed=0
+progress_action="准备中"
 progress_enabled=0
 if [[ -t 1 ]]; then
   progress_enabled=1
 fi
 
 render_progress() {
-  local archive=${1:-} filename percent filled empty bar
+  local archive=${1:-} filename percent filled empty bar position
   [[ "$progress_enabled" == 1 && "$total" -gt 0 ]] || return 0
   filename=$(basename -- "$archive")
   percent=$((processed * 100 / total))
+  position=$((processed + 1))
+  [[ "$position" -le "$total" ]] || position=$total
   filled=$((processed * 28 / total))
   empty=$((28 - filled))
   bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
   bar+=$(printf '%*s' "$empty" '' | tr ' ' '.')
-  printf '\r\033[K同步缓存 [%s] %d/%d %3d%%  %s' "$bar" "$processed" "$total" "$percent" "$filename"
+  printf '\r\033[K同步缓存 [%s] %d/%d %3d%% · %s · %s' "$bar" "$position" "$total" "$percent" "$progress_action" "$filename"
+}
+
+show_action() {
+  local action=$1 archive=$2
+  progress_action=$action
+  if [[ "$progress_enabled" == 1 ]]; then
+    render_progress "$archive"
+  else
+    printf 'cache-sync: %s · %s (%d/%d)\n' "$action" "$(basename -- "$archive")" "$((processed + 1))" "$total"
+  fi
 }
 
 complete_archive() {
@@ -104,7 +118,7 @@ conda_origin() {
 
 sync_archive() {
   local kind=$1 archive=$2 origin=${3:-} sha filename origin_token encoded status result=0
-  render_progress "$archive"
+  show_action "检查网关" "$archive"
   sha=$(sha256sum -- "$archive" | awk '{print $1}')
   filename=$(basename -- "$archive")
   origin_token=$(token "$origin")
@@ -115,12 +129,17 @@ sync_archive() {
     ((present += 1))
     if [[ "$prune" == 1 ]]; then
       rm -f -- "$archive"
+      ((pruned += 1))
+      show_action "网关已有，已清理" "$archive"
+    else
+      show_action "网关已有" "$archive"
     fi
   elif [[ "$status" != "404" ]]; then
     print_error "cache-sync: check failed: $archive (HTTP $status)"
     ((failed += 1))
     result=1
   else
+    show_action "上传中" "$archive"
     status=$(curl -sS -o "$tmp_reply" -w '%{http_code}' -X PUT \
       --data-binary @"$archive" \
       "${PKGRELAY_URL%/}/api/v1/client-sync/${kind}/${sha}?${encoded}" || true)
@@ -128,6 +147,10 @@ sync_archive() {
       ((synced += 1))
       if [[ "$prune" == 1 ]]; then
         rm -f -- "$archive"
+        ((pruned += 1))
+        show_action "已上传并清理" "$archive"
+      else
+        show_action "已上传" "$archive"
       fi
     else
       print_error "cache-sync: upload failed: $archive (HTTP $status)"
@@ -184,14 +207,26 @@ sync_conda_cache() {
   fi
 }
 
+printf '\n== PkgRelay 本地缓存同步 ==\n'
+if [[ "$prune" == 1 ]]; then
+  printf '模式：上传到网关，并清理“网关已有或刚上传成功”的本地归档。不会删除任何 Conda 环境或 pip 已安装包。\n'
+else
+  printf '模式：仅上传，不删除本地归档。\n'
+fi
+printf '正在扫描当前用户的 pip / Conda 下载缓存…\n'
 discover_archives
-if [[ "$progress_enabled" == 1 && "$total" -gt 0 ]]; then
-  printf '同步缓存：共 %d 个归档\n' "$total"
+printf '发现：Conda %d 个 · pip %d 个 · 合计 %d 个归档\n' "${#conda_archives[@]}" "${#pip_archives[@]}" "$total"
+if [[ "$total" == 0 ]]; then
+  printf '没有可同步的下载归档。\n'
 fi
 sync_pip_cache
 sync_conda_cache
 if [[ "$progress_enabled" == 1 && "$total" -gt 0 ]]; then
   printf '\n'
 fi
-echo "cache-sync: central already had $present, uploaded $synced, failed $failed"
+printf '完成：网关已有 %d 个 · 新上传 %d 个 · 失败 %d 个' "$present" "$synced" "$failed"
+if [[ "$prune" == 1 ]]; then
+  printf ' · 已清理本地归档 %d 个' "$pruned"
+fi
+printf '\n'
 [[ "$failed" == 0 ]]
