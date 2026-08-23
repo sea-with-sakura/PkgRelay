@@ -6,6 +6,8 @@ _pkgrelay_wrapper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 _pkgrelay_client_dir="${PKGRELAY_CLIENT_DIR:-${_pkgrelay_wrapper_dir}}"
 [[ -r "${_pkgrelay_client_dir}/client.conf" ]] && source "${_pkgrelay_client_dir}/client.conf"
 : "${PKGRELAY_URL:=http://127.0.0.1:45612}"
+# Also covers ``python -m pip`` started from this Bash session.
+export PIP_NO_CACHE_DIR=1
 
 _pkgrelay_rewrite_pypi_url() {
   local requested_url="${1%/}" token
