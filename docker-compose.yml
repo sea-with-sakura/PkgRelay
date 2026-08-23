@@ -9,7 +9,7 @@ services:
       - "0.0.0.0:45612:8080"
     volumes:
       - ./config.yaml:/config/config.yaml:ro
-      - pkgrelay-data:/data
+      - /4090data1/pkgrelay/data:/data
     environment:
       PKGRELAY_CACHE_DIR: /data
 
@@ -23,9 +23,3 @@ services:
       - "8081:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-
-volumes:
-  # Preserve the existing cache volume while the project is renamed.
-  pkgrelay-data:
-    external: true
-    name: selfcondacache_conda-cache-data
