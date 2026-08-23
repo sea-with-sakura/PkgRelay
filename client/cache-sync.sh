@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Synchronise a user's package archives to the shared cache before pruning
-# local download caches.  Installed environments are never removed here.
+# local download caches. Installed environments are never removed here.
 set -euo pipefail
 
 [[ "${1:-}" == "--prune" || "${1:-}" == "--sync" || -z "${1:-}" ]] || {
@@ -8,7 +8,9 @@ set -euo pipefail
   exit 2
 }
 prune=0
-[[ "${1:-}" == "--prune" ]] && prune=1
+if [[ "${1:-}" == "--prune" ]]; then
+  prune=1
+fi
 
 client_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 if [[ -r "$client_dir/client.conf" ]]; then
@@ -27,6 +29,39 @@ synced=0
 present=0
 failed=0
 conda_dirs=()
+pip_archives=()
+conda_archives=()
+total=0
+processed=0
+progress_enabled=0
+if [[ -t 1 ]]; then
+  progress_enabled=1
+fi
+
+render_progress() {
+  local archive=${1:-} filename percent filled empty bar
+  [[ "$progress_enabled" == 1 && "$total" -gt 0 ]] || return 0
+  filename=$(basename -- "$archive")
+  percent=$((processed * 100 / total))
+  filled=$((processed * 28 / total))
+  empty=$((28 - filled))
+  bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
+  bar+=$(printf '%*s' "$empty" '' | tr ' ' '.')
+  printf '\r\033[K同步缓存 [%s] %d/%d %3d%%  %s' "$bar" "$processed" "$total" "$percent" "$filename"
+}
+
+complete_archive() {
+  local archive=$1
+  ((processed += 1))
+  render_progress "$archive"
+}
+
+print_error() {
+  if [[ "$progress_enabled" == 1 ]]; then
+    printf '\n' >&2
+  fi
+  printf '%s\n' "$*" >&2
+}
 
 token() {
   printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\n'
@@ -68,7 +103,8 @@ conda_origin() {
 }
 
 sync_archive() {
-  local kind=$1 archive=$2 origin=${3:-} sha filename origin_token encoded status
+  local kind=$1 archive=$2 origin=${3:-} sha filename origin_token encoded status result=0
+  render_progress "$archive"
   sha=$(sha256sum -- "$archive" | awk '{print $1}')
   filename=$(basename -- "$archive")
   origin_token=$(token "$origin")
@@ -77,51 +113,70 @@ sync_archive() {
     "${PKGRELAY_URL%/}/api/v1/client-sync/${kind}/${sha}?${encoded}" || true)
   if [[ "$status" == "200" ]]; then
     ((present += 1))
-    [[ "$prune" == 1 ]] && rm -f -- "$archive"
-    return 0
-  fi
-  if [[ "$status" != "404" ]]; then
-    echo "cache-sync: check failed: $archive (HTTP $status)" >&2
+    if [[ "$prune" == 1 ]]; then
+      rm -f -- "$archive"
+    fi
+  elif [[ "$status" != "404" ]]; then
+    print_error "cache-sync: check failed: $archive (HTTP $status)"
     ((failed += 1))
-    return 1
+    result=1
+  else
+    status=$(curl -sS -o "$tmp_reply" -w '%{http_code}' -X PUT \
+      --data-binary @"$archive" \
+      "${PKGRELAY_URL%/}/api/v1/client-sync/${kind}/${sha}?${encoded}" || true)
+    if [[ "$status" == "201" ]]; then
+      ((synced += 1))
+      if [[ "$prune" == 1 ]]; then
+        rm -f -- "$archive"
+      fi
+    else
+      print_error "cache-sync: upload failed: $archive (HTTP $status)"
+      ((failed += 1))
+      result=1
+    fi
   fi
-  status=$(curl -sS -o "$tmp_reply" -w '%{http_code}' -X PUT \
-    --data-binary @"$archive" \
-    "${PKGRELAY_URL%/}/api/v1/client-sync/${kind}/${sha}?${encoded}" || true)
-  if [[ "$status" == "201" ]]; then
-    ((synced += 1))
-    [[ "$prune" == 1 ]] && rm -f -- "$archive"
-    return 0
+  complete_archive "$archive"
+  return "$result"
+}
+
+discover_archives() {
+  local pip_cache archive cache_dir
+  pip_cache=$(python3 -m pip cache dir 2>/dev/null || true)
+  if [[ -d "$pip_cache" ]]; then
+    while IFS= read -r -d '' archive; do
+      pip_archives+=("$archive")
+    done < <(find "$pip_cache" -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.tar.bz2' -o -name '*.tar.xz' -o -name '*.zip' \) -print0)
   fi
-  echo "cache-sync: upload failed: $archive (HTTP $status)" >&2
-  ((failed += 1))
-  return 1
+  if command -v conda >/dev/null 2>&1; then
+    while IFS= read -r cache_dir; do
+      [[ "$cache_dir" == "$HOME/"* && -d "$cache_dir" ]] || continue
+      conda_dirs+=("$cache_dir")
+      while IFS= read -r -d '' archive; do
+        conda_archives+=("$archive")
+      done < <(find "$cache_dir" -maxdepth 1 -type f \( -name '*.conda' -o -name '*.tar.bz2' \) -print0)
+    done < <(conda info --json | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("pkgs_dirs", [])))')
+  fi
+  total=$((${#pip_archives[@]} + ${#conda_archives[@]}))
 }
 
 sync_pip_cache() {
-  local pip_cache archive origin
-  pip_cache=$(python3 -m pip cache dir 2>/dev/null || true)
-  [[ -d "$pip_cache" ]] || return 0
-  while IFS= read -r -d '' archive; do
+  local archive origin
+  for archive in "${pip_archives[@]}"; do
     origin=$(pip_origin "$archive")
     sync_archive pip "$archive" "$origin" || true
-  done < <(find "$pip_cache" -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.tar.bz2' -o -name '*.tar.xz' -o -name '*.zip' \) -print0)
+  done
   if [[ "$prune" == 1 && "$failed" == 0 ]]; then
     python3 -m pip cache purge >/dev/null 2>&1 || true
   fi
 }
 
 sync_conda_cache() {
-  local cache_dir archive origin
-  command -v conda >/dev/null 2>&1 || return 0
-  while IFS= read -r cache_dir; do
-    [[ "$cache_dir" == "$HOME/"* && -d "$cache_dir" ]] || continue
-    conda_dirs+=("$cache_dir")
-    while IFS= read -r -d '' archive; do
-      origin=$(conda_origin "$cache_dir" "$(basename -- "$archive")")
-      sync_archive conda "$archive" "$origin" || true
-    done < <(find "$cache_dir" -maxdepth 1 -type f \( -name '*.conda' -o -name '*.tar.bz2' \) -print0)
-  done < <(conda info --json | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("pkgs_dirs", [])))')
+  local archive origin cache_dir
+  for archive in "${conda_archives[@]}"; do
+    cache_dir=$(dirname -- "$archive")
+    origin=$(conda_origin "$cache_dir" "$(basename -- "$archive")" || true)
+    sync_archive conda "$archive" "$origin" || true
+  done
   if [[ "$prune" == 1 && "$failed" == 0 ]]; then
     for cache_dir in "${conda_dirs[@]}"; do
       rm -rf -- "$cache_dir/cache" "$cache_dir/urls" "$cache_dir/urls.txt"
@@ -129,7 +184,14 @@ sync_conda_cache() {
   fi
 }
 
+discover_archives
+if [[ "$progress_enabled" == 1 && "$total" -gt 0 ]]; then
+  printf '同步缓存：共 %d 个归档\n' "$total"
+fi
 sync_pip_cache
 sync_conda_cache
+if [[ "$progress_enabled" == 1 && "$total" -gt 0 ]]; then
+  printf '\n'
+fi
 echo "cache-sync: central already had $present, uploaded $synced, failed $failed"
 [[ "$failed" == 0 ]]
