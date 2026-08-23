@@ -5,65 +5,67 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PkgRelay</title>
     <link rel="icon" type="image/png" href="/assets/pkgrelay-icon.png?v=1">
-    <link rel="stylesheet" href="/assets/styles.css?v=2">
+    <link rel="stylesheet" href="/assets/styles.css?v=4">
   </head>
   <body>
     <main class="page">
       <header class="hero">
         <div class="brand">
           <img class="brand-icon" src="/assets/pkgrelay-icon.png?v=1" alt="PkgRelay" width="58" height="58">
-          <div>
-            <p class="eyebrow">INTERNAL PACKAGE INFRASTRUCTURE</p>
-            <h1>PkgRelay</h1>
-            <p class="intro">内网包缓存</p>
-          </div>
+          <div><p class="eyebrow">INTERNAL PACKAGE INFRASTRUCTURE</p><h1>PkgRelay</h1><p class="intro">内网 Conda / pip 缓存中转</p></div>
         </div>
         <div class="health"><span id="health-dot" class="dot"></span><span id="health-text">正在连接</span></div>
       </header>
 
       <section class="metrics" aria-label="缓存统计">
         <article><span>物理缓存对象</span><strong id="artifact-count">—</strong></article>
-        <article><span>缓存占用</span><strong id="cache-bytes">—</strong></article>
-        <article><span>命中次数</span><strong id="cache-hits">—</strong></article>
-        <article><span>缓存池</span><strong id="source-count">2</strong></article>
+        <article><span>实际占用</span><strong id="cache-bytes">—</strong></article>
+        <article><span>累计命中</span><strong id="cache-hits">—</strong></article>
+        <article><span>Conda Channel</span><strong id="channel-count">—</strong></article>
       </section>
 
-      <section class="panel">
+      <section class="panel pool-panel">
         <div class="section-heading"><div><p class="eyebrow">CACHE POOLS</p><h2>缓存池</h2></div><button id="refresh" class="button secondary">刷新数据</button></div>
-        <div id="sources" class="sources"><p class="muted">加载中…</p></div>
+        <div id="pools" class="pool-grid"><p class="muted">加载中…</p></div>
       </section>
 
-      <section class="grid">
-        <section class="panel">
-          <div class="section-heading"><div><p class="eyebrow">IMPORT</p><h2>导入</h2></div></div>
-          <pre class="result"># 预览
-./import/import-cache.sh conda /4090data1/sakura/miniconda3/pkgs --dry-run
-./import/import-cache.sh pypi /home/sakura/.cache/pip --dry-run
-
-# 导入
-./import/import-cache.sh conda /4090data1/sakura/miniconda3/pkgs
-./import/import-cache.sh pypi /home/sakura/.cache/pip</pre>
+      <section class="grid compact-grid">
+        <section class="panel client-panel">
+          <p class="eyebrow">CLIENT</p><h2>接入客户端</h2>
+          <p class="muted panel-copy">Conda Channel 由网关统一下发；pip 命令自动接入缓存。</p>
+          <pre id="client-config" class="result"></pre>
         </section>
-
-        <section class="panel">
-          <div class="section-heading"><div><p class="eyebrow">CLIENT</p><h2>客户端</h2></div></div>
-          <pre id="client-config" class="result">加载中…</pre>
+        <section class="panel import-panel">
+          <p class="eyebrow">IMPORT</p><h2>导入已有缓存</h2>
+          <p class="muted panel-copy">仅在缓存服务器上执行，不修改原始目录。</p>
+          <pre class="result">./import/import-cache.sh conda /path/to/miniconda3/pkgs
+./import/import-cache.sh pypi ~/.cache/pip</pre>
         </section>
       </section>
 
-      <section class="panel">
-        <div class="section-heading"><div><p class="eyebrow">ACTIVITY</p><h2>最近路由记录</h2></div></div>
-        <div class="table-wrap"><table><thead><tr><th>来源</th><th>路径</th><th>大小</th><th>命中</th><th>上游</th><th>访问时间</th></tr></thead><tbody id="artifacts"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody></table></div>
+      <section class="panel activity-panel">
+        <div class="section-heading"><div><p class="eyebrow">RECENT CACHE ACTIVITY</p><h2>最近缓存记录</h2></div></div>
+        <div class="table-wrap"><table><thead><tr><th>Channel</th><th>文件</th><th>大小</th><th>命中</th><th>最近访问</th></tr></thead><tbody id="artifacts"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody></table></div>
       </section>
     </main>
-    <dialog id="source-dialog" class="source-dialog">
+
+    <dialog id="browser-dialog" class="source-dialog">
       <section class="dialog-content">
-        <header class="section-heading"><div><p class="eyebrow">CACHE POOL CONTENTS</p><h2 id="detail-title">缓存池</h2><p id="detail-summary" class="muted"></p></div><button id="detail-close" class="button secondary" type="button">关闭</button></header>
-        <div class="search-row"><input id="detail-search" type="search" placeholder="搜索文件名、来源 URL 或 SHA256"><button id="detail-search-button" class="button" type="button">搜索</button></div>
-        <p id="detail-count" class="muted"></p>
-        <div class="table-wrap"><table><thead><tr><th>路径</th><th>大小</th><th>命中</th><th>缓存时间</th><th>来源</th></tr></thead><tbody id="detail-artifacts"></tbody></table></div>
+        <header class="section-heading dialog-heading">
+          <div><p id="detail-eyebrow" class="eyebrow">CONDA CACHE</p><h2 id="detail-title">Conda 缓存</h2><p id="detail-summary" class="muted"></p></div>
+          <div class="dialog-actions"><button id="detail-back" class="button secondary" type="button" hidden>返回 Channel</button><button id="detail-close" class="button secondary" type="button">关闭</button></div>
+        </header>
+
+        <section id="channel-view" hidden><div id="channel-cards" class="channel-grid"></div></section>
+
+        <section id="artifact-view" hidden>
+          <div class="search-row"><input id="detail-search" type="search" placeholder="搜索包文件名"><button id="detail-search-button" class="button" type="button">搜索</button></div>
+          <label class="metadata-toggle"><input id="detail-metadata" type="checkbox"> 显示 repodata 等索引文件</label>
+          <p id="detail-count" class="muted"></p>
+          <div class="table-wrap"><table><thead><tr><th>平台</th><th>包文件</th><th>大小</th><th>命中</th><th>缓存时间</th></tr></thead><tbody id="detail-artifacts"></tbody></table></div>
+        </section>
       </section>
     </dialog>
-    <script src="/assets/app.js?v=3"></script>
+    <script src="/assets/app.js?v=4"></script>
   </body>
 </html>

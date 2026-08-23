@@ -266,14 +266,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/sources/{source_id}/artifacts")
     async def source_artifacts(
-        source_id: str, query: str = "", limit: int = 100, offset: int = 0
+        source_id: str,
+        query: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        include_metadata: bool = False,
     ) -> dict[str, object]:
         if source_id not in settings.sources and dynamic_source(source_id) is None:
             raise HTTPException(status_code=404, detail=f"Unknown source: {source_id}")
         limit = min(max(limit, 1), 500)
         offset = max(offset, 0)
         query = query.strip()[:200]
-        total, records = store.search_artifacts(source_id, query, limit, offset)
+        total, records = store.search_artifacts(
+            source_id, query, limit, offset, include_metadata=include_metadata
+        )
         return {"total": total, "artifacts": [record.__dict__ for record in records]}
 
     @app.get("/api/v1/pools/{pool}/artifacts")

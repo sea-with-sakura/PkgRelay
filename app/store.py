@@ -24,6 +24,7 @@ def is_metadata_path(path: str) -> bool:
     name = PurePosixPath(path).name
     return (
         name == "channeldata.json"
+        or name in {"notices.json", "terms.json"}
         or name.startswith("repodata")
         or name.startswith("current_repodata")
         or name.endswith(".jlap")
@@ -127,6 +128,12 @@ class CacheStore:
         if "pool" not in columns:
             self.db.execute("ALTER TABLE artifacts ADD COLUMN pool TEXT NOT NULL DEFAULT 'conda'")
             self.db.commit()
+        # These Conda control documents are metadata too. Older cache records
+        # may predate their classification, so correct them on open.
+        self.db.execute(
+            "UPDATE artifacts SET is_metadata = 1 WHERE path IN ('notices.json', 'terms.json')"
+        )
+        self.db.commit()
 
     def close(self) -> None:
         self.db.close()
@@ -337,10 +344,17 @@ class CacheStore:
             yield ArtifactRecord(**dict(row))
 
     def search_artifacts(
-        self, source_id: str, query: str = "", limit: int = 100, offset: int = 0
+        self,
+        source_id: str,
+        query: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        include_metadata: bool = True,
     ) -> tuple[int, list[ArtifactRecord]]:
         where = "source_id = ?"
         values: list[object] = [source_id]
+        if not include_metadata:
+            where += " AND is_metadata = 0"
         if query:
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             where += " AND (path LIKE ? ESCAPE '\\' OR upstream_url LIKE ? ESCAPE '\\' OR sha256 LIKE ? ESCAPE '\\')"
@@ -468,7 +482,11 @@ class CacheStore:
             ).fetchone()
             pools.append({"pool": pool, **dict(usage), **dict(blob_usage)})
         sources = self.db.execute(
-            """SELECT source_id, COUNT(*) AS artifact_count, COALESCE(SUM(size), 0) AS total_bytes,
+            """SELECT source_id, COUNT(*) AS artifact_count,
+                      COALESCE(SUM(CASE WHEN is_metadata = 0 THEN 1 ELSE 0 END), 0) AS package_count,
+                      COALESCE(SUM(CASE WHEN is_metadata = 1 THEN 1 ELSE 0 END), 0) AS metadata_count,
+                      COALESCE(SUM(size), 0) AS total_bytes,
+                      COALESCE(SUM(CASE WHEN is_metadata = 0 THEN size ELSE 0 END), 0) AS package_bytes,
                       COALESCE(SUM(hit_count), 0) AS total_hits
                FROM artifacts GROUP BY source_id ORDER BY source_id"""
         ).fetchall()
