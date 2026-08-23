@@ -40,7 +40,7 @@ remove_old_shell_client() {
 }
 
 install_conda_config() {
-  command -v conda >/dev/null 2>&1 || { say "未找到 conda，跳过 Conda 配置。"; return; }
+  command -v conda >/dev/null 2>&1 || { say "Conda not found; skipped."; return; }
   if [[ ! -e "$condarc_existed" ]]; then
     if [[ -f "$condarc" ]]; then
       cp -a "$condarc" "$condarc_backup"
@@ -52,7 +52,7 @@ install_conda_config() {
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/condarc.yaml" -o "$client_dir/condarc.yaml"
   cp -f "$client_dir/condarc.yaml" "$condarc"
   conda config --file "$condarc" --validate >/dev/null
-  ok "已由网关接管当前用户的 Conda Channel。"
+  ok "Conda configured."
 }
 
 restore_conda_config() {
@@ -62,7 +62,7 @@ restore_conda_config() {
   else
     rm -f "$condarc"
   fi
-  ok "已恢复安装前的用户 Conda 配置。"
+  ok "Conda restored."
 }
 
 install_client() {
@@ -80,37 +80,35 @@ install_client() {
 # <<< pkgrelay pip wrapper <<<
 EOF
   install_conda_config
-  ok "已接入缓存层。"
+  ok "Installed."
   if [[ -t 0 ]]; then
-    say "可选：同步当前用户已下载的 Conda / pip 归档到网关；同步时会显示扫描、检查、上传与清理进度。"
-    say "选择清理后，仅删除网关已确认保存的下载归档，不会删除任何环境或已安装包。"
-    read -r -p "现在同步并清理本地下载缓存？ [y/N] " sync_local_cache
+    read -r -p "Sync and prune local package cache? [y/N] " sync_local_cache
     if [[ "$sync_local_cache" =~ ^[Yy]$ ]]; then
       if ! "$client_dir/cache-sync.sh" --prune; then
-        say "! 同步未完全成功；未确认的本地归档已保留，可稍后执行 cache-sync.sh --prune 重试。"
+        say "! Sync incomplete. Retry: cache-sync.sh --prune"
       fi
     fi
   fi
-  say "执行：exec bash -l"
+  say "Run: exec bash -l"
 }
 
 uninstall_client() {
   remove_blocks
   restore_conda_config
   rm -rf -- "$client_dir" "$legacy_dir"
-  ok "已移除缓存客户端。执行：exec bash -l"
+  ok "Removed. Run: exec bash -l"
 }
 
-say "\n${blue}== PkgRelay 缓存客户端 ==${reset}"
-say "缓存站：$PKGRELAY_URL"
-say "1. 安装：由网关接管 Conda / pip 缓存"
-say "2. 卸载：恢复安装前的配置"
-read -r -p "请选择 [1/2]：" action
+say "\n${blue}== PkgRelay ==${reset}"
+say "Gateway: $PKGRELAY_URL"
+say "1. Install"
+say "2. Uninstall"
+read -r -p "Choice [1/2]: " action
 case "$action" in
   1)
     remove_old_shell_client
     install_client
     ;;
   2) uninstall_client ;;
-  *) say "无效选择，未做修改。" >&2; exit 2 ;;
+  *) say "Invalid choice." >&2; exit 2 ;;
 esac
