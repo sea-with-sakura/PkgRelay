@@ -17,7 +17,6 @@ sources:
 
   defaults-r:
     upstreams:
-      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
       - https://repo.anaconda.com/pkgs/r
     metadata_ttl_seconds: 600
     fallback_on_not_found: true
@@ -38,7 +37,6 @@ sources:
 
   nvidia:
     upstreams:
-      - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/nvidia
       - https://conda.anaconda.org/nvidia
     metadata_ttl_seconds: 600
     fallback_on_not_found: true
