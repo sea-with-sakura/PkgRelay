@@ -28,12 +28,11 @@ function renderPools(sources, stats) {
     element.addEventListener("click", open);
     element.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } });
   });
-  const condaSources = sources.filter((source) => source.kind === "conda");
   const pypiSources = sources.filter((source) => source.kind === "pypi" && !source.dynamic);
   const defaultPypi = pypiSources.find((source) => source.name === "pypi") || pypiSources[0];
   const specialisedPypi = pypiSources.filter((source) => source !== defaultPypi);
-  const condaConfig = ["# ~/.condarc", "channels:", ...condaSources.map((source) => `  - ${location.origin}/get/${source.name}`), "channel_priority: strict"];
-  const pipConfig = defaultPypi ? ["# ~/.config/pip/pip.conf", "[global]", `index-url = ${location.origin}/get/pypi/${defaultPypi.name}/simple`] : [];
+  const condaConfig = ["# 安装客户端后，Conda 的 Channel 配置保持不变。", "conda create -n demo python=3.12"];
+  const pipConfig = defaultPypi ? ["", "# pip 默认索引由客户端接入缓存层", `# ${location.origin}/get/pypi/${defaultPypi.name}/simple`] : [];
   const specialisedConfig = specialisedPypi.flatMap((source) => ["", `# ${source.name} 专用源（按需替换包名）`, `# pip3 install <package> --index-url ${location.origin}/get/pypi/${source.name}/simple`]);
   $("client-config").textContent = [...condaConfig, "", ...pipConfig, ...specialisedConfig].join("\n");
 }

@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from app.main import DynamicSourceError, _decode_dynamic_upstream
+from app.main import DynamicSourceError, _decode_dynamic_conda_upstream, _decode_dynamic_upstream
 from app.store import CacheStore
 from app.sync import ClientSync
 
@@ -23,6 +23,17 @@ def test_dynamic_source_decodes_and_normalises_an_https_url():
 def test_dynamic_source_rejects_http_urls():
     with pytest.raises(DynamicSourceError):
         _decode_dynamic_upstream(token("http://pypi.org/simple"))
+
+
+def test_dynamic_conda_source_decodes_and_normalises_an_https_url():
+    assert _decode_dynamic_conda_upstream(
+        token("https://CONDA.ANACONDA.ORG/conda-forge/"),
+    ) == "https://conda.anaconda.org/conda-forge"
+
+
+def test_dynamic_conda_source_rejects_an_ip_address():
+    with pytest.raises(DynamicSourceError):
+        _decode_dynamic_conda_upstream(token("https://172.16.8.1/conda"))
 
 
 def test_dynamic_sources_are_persisted_by_canonical_upstream(tmp_path):

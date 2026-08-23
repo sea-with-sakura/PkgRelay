@@ -37,6 +37,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 客户端会在使用 `pip` 或 Conda 包操作时每 6 小时检查一次服务端版本；有更新时仅刷新 PkgRelay 自己管理的客户端文件，不修改用户环境。
 
+Conda 的 Channel 配置、优先级和命令行 `-c` 均由 Conda 原样决定。客户端不会新增或写入 Conda Channel，只会在单次包操作中把 Conda 已选定的 Channel 临时映射到缓存站。
+
 需要同步并清理当前用户下载缓存时：
 
 ```bash
