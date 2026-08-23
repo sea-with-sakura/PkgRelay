@@ -372,7 +372,9 @@ class CacheStore:
     ) -> tuple[int, list[ArtifactRecord]]:
         if pool not in self.VALID_POOLS:
             raise ValueError(f"Invalid cache pool: {pool!r}")
-        where = "pool = ?"
+        # Pool browsers are package browsers.  Conda repodata and PyPI
+        # ``simple`` HTML are transport metadata, not installable archives.
+        where = "pool = ? AND is_metadata = 0"
         values: list[object] = [pool]
         if query:
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -398,7 +400,9 @@ class CacheStore:
         """
         if pool not in self.VALID_POOLS:
             raise ValueError(f"Invalid cache pool: {pool!r}")
-        where = "pool = ?"
+        # The pool UI shows installable archives only.  Index documents stay
+        # cached for pip/Conda, but do not appear as package files.
+        where = "pool = ? AND is_metadata = 0"
         values: list[object] = [pool]
         if query:
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -472,12 +476,13 @@ class CacheStore:
         for pool in sorted(self.VALID_POOLS):
             usage = self.db.execute(
                 """SELECT COUNT(*) AS artifact_count, COALESCE(SUM(hit_count), 0) AS total_hits
-                   FROM artifacts WHERE pool = ?""",
+                   FROM artifacts WHERE pool = ? AND is_metadata = 0""",
                 (pool,),
             ).fetchone()
             blob_usage = self.db.execute(
                 """SELECT COUNT(*) AS blob_count, COALESCE(SUM(size), 0) AS total_bytes
-                   FROM (SELECT sha256, MAX(size) AS size FROM artifacts WHERE pool = ? GROUP BY sha256)""",
+                   FROM (SELECT sha256, MAX(size) AS size FROM artifacts
+                         WHERE pool = ? AND is_metadata = 0 GROUP BY sha256)""",
                 (pool,),
             ).fetchone()
             pools.append({"pool": pool, **dict(usage), **dict(blob_usage)})
