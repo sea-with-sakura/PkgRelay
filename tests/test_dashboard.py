@@ -46,6 +46,7 @@ def test_dashboard_and_status_are_available(tmp_path: Path):
     assert "conda-wrapper.sh" in bootstrap.text
     assert "--override-channels" in bootstrap.text
     assert 'cat > "$client_dir/conda-channels.conf"' not in bootstrap.text
+    assert 'rm -f "$client_dir/conda-channels.conf"' not in bootstrap.text
     assert "Conda did not report an effective channel" in bootstrap.text
     assert "append channels nodefaults" not in bootstrap.text
     assert "安装：接入缓存层" in bootstrap.text

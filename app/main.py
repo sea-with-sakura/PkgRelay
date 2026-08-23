@@ -302,7 +302,6 @@ if command -v conda >/dev/null 2>&1; then
   install -d -m 0755 "$client_dir"
 cat > "$client_dir/conda-wrapper.sh" <<'PKGRELAY_CONDA_WRAPPER'
 {conda_wrapper}PKGRELAY_CONDA_WRAPPER
-  rm -f "$client_dir/conda-channels.conf"
   if ! grep -Fq '# >>> pkgrelay conda wrapper >>>' "$bashrc" 2>/dev/null; then
     [[ -f "$bashrc" ]] && cp -a "$bashrc" "$bashrc.pkgrelay-backup.$timestamp"
     cat >> "$bashrc" <<PKGRELAY_CONDA_BASHRC
