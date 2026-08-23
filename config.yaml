@@ -1,0 +1,32 @@
+cache_dir: ./data
+
+# Trusted LAN clients may register/upload their own package archives before
+# safely pruning local caches. Put this service behind network ACLs or TLS in
+# a wider deployment.
+client_sync:
+  enabled: true
+  max_upload_bytes: 21474836480
+
+sources:
+  conda-forge:
+    upstreams:
+      - https://conda.anaconda.org/conda-forge
+    metadata_ttl_seconds: 600
+
+  pytorch:
+    upstreams:
+      - https://conda.anaconda.org/pytorch
+    metadata_ttl_seconds: 600
+
+  nvidia:
+    upstreams:
+      - https://conda.anaconda.org/nvidia
+    metadata_ttl_seconds: 600
+
+  pypi:
+    kind: pypi
+    upstreams:
+      - https://pypi.org
+    # Every pip install revalidates the per-project Simple index upstream.
+    # ETag/Last-Modified normally yields a tiny 304 response when unchanged.
+    metadata_ttl_seconds: 0

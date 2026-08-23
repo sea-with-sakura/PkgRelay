@@ -1,0 +1,35 @@
+# Each source is a Conda channel or a PyPI Simple API namespace. Keep different
+# logical origins separate: a fallback here is only a replica of that origin.
+cache_dir: ./data
+# A user may use any path beneath an allowed HTTPS host as --index-url. The
+# gateway records that path as a dynamic shared source on first use.
+client_sync:
+  enabled: true
+  max_upload_bytes: 21474836480
+# The web service never mounts user package directories. The host-side
+# import-cache.sh script supplies a temporary /imports/source allow-list.
+
+sources:
+  conda-forge:
+    upstreams:
+      - https://conda.anaconda.org/conda-forge
+    metadata_ttl_seconds: 600
+
+  pytorch:
+    upstreams:
+      - https://conda.anaconda.org/pytorch
+    metadata_ttl_seconds: 600
+
+  nvidia:
+    upstreams:
+      - https://conda.anaconda.org/nvidia
+    metadata_ttl_seconds: 600
+
+  # Standard pip index. pip will use /get/pypi/pypi/simple.
+  pypi:
+    kind: pypi
+    upstreams:
+      - https://pypi.org
+    # Revalidate each requested project index on every pip install. Package
+    # files remain cached and only download on a cache miss.
+    metadata_ttl_seconds: 0
