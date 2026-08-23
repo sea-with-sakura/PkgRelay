@@ -113,7 +113,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return SourceConfig(
             name=str(row["source_id"]),
             upstreams=(str(row["upstream_url"]),),
-            metadata_ttl_seconds=0,
+            # External package indexes (notably PyTorch's CUDA index) can
+            # contain multi-megabyte project pages.  Re-fetching those pages
+            # for every pip retry exceeds pip's 15s response timeout.
+            metadata_ttl_seconds=600,
             kind="pypi",
             index_path_template="{project}/",
         )
@@ -205,7 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "name": str(row["source_id"]),
                 "upstreams": (str(row["upstream_url"]),),
-                "metadata_ttl_seconds": 0,
+                "metadata_ttl_seconds": 600,
                 "kind": "pypi",
                 "dynamic": True,
             }

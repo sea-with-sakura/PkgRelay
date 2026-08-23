@@ -6,7 +6,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterator
+from typing import Iterable, Iterator
 
 
 class UnsafePathError(ValueError):
@@ -431,16 +431,32 @@ class CacheStore:
     def register_pypi_link(
         self, source_id: str, project: str, upstream_url: str, cache_path: str, filename: str
     ) -> str:
-        token = hashlib.sha256(f"{source_id}\0{upstream_url}".encode()).hexdigest()
-        self.db.execute(
+        token = self.pypi_link_token(source_id, upstream_url)
+        self.register_pypi_links(((source_id, project, upstream_url, cache_path, filename),))
+        return token
+
+    @staticmethod
+    def pypi_link_token(source_id: str, upstream_url: str) -> str:
+        return hashlib.sha256(f"{source_id}\0{upstream_url}".encode()).hexdigest()
+
+    def register_pypi_links(
+        self, links: Iterable[tuple[str, str, str, str, str]]
+    ) -> None:
+        """Register a complete PEP 503 page in one SQLite transaction."""
+        rows = [
+            (source_id, self.pypi_link_token(source_id, upstream_url), project, upstream_url, cache_path, filename)
+            for source_id, project, upstream_url, cache_path, filename in links
+        ]
+        if not rows:
+            return
+        self.db.executemany(
             """INSERT INTO pypi_links (source_id, token, project, upstream_url, cache_path, filename)
                VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(source_id, token) DO UPDATE SET
-                 project=excluded.project, cache_path=excluded.cache_path, filename=excluded.filename""",
-            (source_id, token, project, upstream_url, cache_path, filename),
+               project=excluded.project, cache_path=excluded.cache_path, filename=excluded.filename""",
+            rows,
         )
         self.db.commit()
-        return token
 
     def get_pypi_link(self, source_id: str, token: str) -> sqlite3.Row | None:
         return self.db.execute(

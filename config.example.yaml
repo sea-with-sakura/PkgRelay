@@ -55,7 +55,6 @@ sources:
     upstreams:
       - https://pypi.tuna.tsinghua.edu.cn
       - https://pypi.org
-    # Revalidate each requested project index on every pip install. Package
-    # files remain cached and only download on a cache miss.
-    metadata_ttl_seconds: 0
+    # Project indexes are cached briefly. Package files remain immutable.
+    metadata_ttl_seconds: 600
     fallback_on_not_found: true

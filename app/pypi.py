@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import PurePosixPath
@@ -79,6 +80,8 @@ class PypiGateway:
         self.store = store
         self.gateway = gateway
         self.sources = sources or {}
+        self._rendered_indexes: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+        self._max_rendered_indexes = 8
 
     @staticmethod
     def _artifact_path(upstream_url: str, filename: str) -> str:
@@ -86,14 +89,19 @@ class PypiGateway:
         return f"pypi/files/{digest}/{filename}"
 
     def _render(self, source: SourceConfig, project: str, links: list[SimpleLink], base_url: str) -> str:
-        rendered: list[str] = []
+        resolved_links: list[tuple[SimpleLink, str, str, str]] = []
+        registrations: list[tuple[str, str, str, str, str]] = []
         for link in links:
             upstream_url = _url_without_fragment(link.url)
             link_source_id = link.source_id or source.name
             cache_path = link.cache_path or self._artifact_path(upstream_url, link.filename)
-            token = self.store.register_pypi_link(
-                link_source_id, project, upstream_url, cache_path, link.filename
-            )
+            token = self.store.pypi_link_token(link_source_id, upstream_url)
+            resolved_links.append((link, link_source_id, token, upstream_url))
+            registrations.append((link_source_id, project, upstream_url, cache_path, link.filename))
+        self.store.register_pypi_links(registrations)
+
+        rendered: list[str] = []
+        for link, link_source_id, token, upstream_url in resolved_links:
             fragment = urlsplit(link.url).fragment
             href = f"{base_url}/get/pypi/{link_source_id}/files/{token}/{link.filename}"
             if fragment:
@@ -151,7 +159,19 @@ class PypiGateway:
         # same filename; other upstream versions remain available to pip.
         imported_filenames = {link.filename for link in imported_links}
         links = imported_links + [link for link in parser.links if link.filename not in imported_filenames]
-        return self._render(source, project, links, base_url), result.cache_status
+        cache_key = (source.name, project, base_url, result.record.sha256)
+        if not imported_links:
+            cached_html = self._rendered_indexes.get(cache_key)
+            if cached_html is not None:
+                self._rendered_indexes.move_to_end(cache_key)
+                return cached_html, result.cache_status
+        rendered = self._render(source, project, links, base_url)
+        if not imported_links:
+            self._rendered_indexes[cache_key] = rendered
+            self._rendered_indexes.move_to_end(cache_key)
+            while len(self._rendered_indexes) > self._max_rendered_indexes:
+                self._rendered_indexes.popitem(last=False)
+        return rendered, result.cache_status
 
     async def artifact(self, source: SourceConfig, token: str) -> CacheResult:
         link = self.store.get_pypi_link(source.name, token)

@@ -51,7 +51,6 @@ sources:
     upstreams:
       - https://pypi.tuna.tsinghua.edu.cn
       - https://pypi.org
-    # Every pip install revalidates the per-project Simple index upstream.
-    # ETag/Last-Modified normally yields a tiny 304 response when unchanged.
-    metadata_ttl_seconds: 0
+    # Project indexes are cached briefly.  Wheel files remain immutable.
+    metadata_ttl_seconds: 600
     fallback_on_not_found: true
