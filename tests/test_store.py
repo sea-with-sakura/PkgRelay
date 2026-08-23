@@ -49,3 +49,29 @@ def test_sources_share_only_their_package_manager_pool(tmp_path: Path):
     assert pools["conda"]["blob_count"] == 1
     assert pools["pip"]["blob_count"] == 1
     store.close()
+
+
+def test_pool_blob_search_groups_duplicate_routes(tmp_path: Path):
+    store = CacheStore(tmp_path)
+    store.store_bytes(
+        source_id="conda-forge",
+        path="linux-64/repodata.json.zst",
+        content=b"same-index",
+        upstream_url="https://conda.anaconda.org/conda-forge/linux-64/repodata.json.zst",
+        metadata=True,
+    )
+    store.store_bytes(
+        source_id="conda-external-example",
+        path="linux-64/repodata.json.zst",
+        content=b"same-index",
+        upstream_url="https://conda.anaconda.org/conda-forge/linux-64/repodata.json.zst",
+        metadata=True,
+    )
+
+    total, route_total, blobs = store.search_pool_blobs("conda", "repodata.json.zst")
+
+    assert total == 1
+    assert route_total == 2
+    assert blobs[0]["route_count"] == 2
+    assert blobs[0]["source_count"] == 2
+    store.close()

@@ -372,6 +372,44 @@ class CacheStore:
         ).fetchall()
         return total, [ArtifactRecord(**dict(row)) for row in rows]
 
+    def search_pool_blobs(
+        self, pool: str, query: str = "", limit: int = 100, offset: int = 0
+    ) -> tuple[int, int, list[dict[str, object]]]:
+        """Search the physical objects in a pool, not their routing records.
+
+        A single content-addressed Blob can be referenced by multiple source
+        routes (for example a legacy static Conda route and its newer dynamic
+        counterpart).  The dashboard's pool browser should show that Blob once
+        while retaining route counts for provenance and later cache eviction.
+        """
+        if pool not in self.VALID_POOLS:
+            raise ValueError(f"Invalid cache pool: {pool!r}")
+        where = "pool = ?"
+        values: list[object] = [pool]
+        if query:
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where += " AND (path LIKE ? ESCAPE '\\' OR upstream_url LIKE ? ESCAPE '\\' OR sha256 LIKE ? ESCAPE '\\')"
+            values.extend([f"%{escaped}%"] * 3)
+        route_total = self.db.execute(
+            f"SELECT COUNT(*) FROM artifacts WHERE {where}", values
+        ).fetchone()[0]
+        total = self.db.execute(
+            f"SELECT COUNT(*) FROM (SELECT sha256 FROM artifacts WHERE {where} GROUP BY sha256)",
+            values,
+        ).fetchone()[0]
+        rows = self.db.execute(
+            f"""SELECT sha256, MIN(path) AS path, MAX(size) AS size,
+                       SUM(hit_count) AS hit_count, MAX(fetched_at) AS fetched_at,
+                       MAX(last_accessed_at) AS last_accessed_at,
+                       MIN(upstream_url) AS upstream_url,
+                       COUNT(*) AS route_count, COUNT(DISTINCT source_id) AS source_count
+                FROM artifacts WHERE {where}
+                GROUP BY sha256
+                ORDER BY MAX(last_accessed_at) DESC LIMIT ? OFFSET ?""",
+            [*values, limit, offset],
+        ).fetchall()
+        return total, route_total, [dict(row) for row in rows]
+
     def register_pypi_link(
         self, source_id: str, project: str, upstream_url: str, cache_path: str, filename: str
     ) -> str:

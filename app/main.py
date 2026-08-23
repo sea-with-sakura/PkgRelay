@@ -532,8 +532,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Unknown cache pool: {pool}")
         limit = min(max(limit, 1), 500)
         offset = max(offset, 0)
-        total, records = store.search_pool_artifacts(pool, query.strip()[:200], limit, offset)
-        return {"total": total, "artifacts": [record.__dict__ for record in records]}
+        total, route_total, blobs = store.search_pool_blobs(pool, query.strip()[:200], limit, offset)
+        return {"total": total, "route_total": route_total, "artifacts": blobs}
 
     # PEP 503 clients (including pip) request project pages with a trailing
     # slash.  Keep the slashless form too for browsers and older clients.

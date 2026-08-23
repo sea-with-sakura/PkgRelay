@@ -21,7 +21,7 @@ function renderPools(sources, stats) {
   ];
   $("sources").innerHTML = poolDefinitions.map((pool) => {
     const usage = statsByPool[pool.name] || { artifact_count: 0, blob_count: 0, total_bytes: 0, total_hits: 0 };
-    return `<article class="source clickable" data-pool="${pool.name}" role="button" tabindex="0"><span class="tag">${pool.name}</span><h3>${pool.title} 缓存池</h3><p>${usage.artifact_count} 个对象 · ${usage.blob_count} 个 Blob · ${formatBytes(usage.total_bytes)} · ${usage.total_hits} 次命中</p><p class="source-action">查看内容 →</p></article>`;
+    return `<article class="source clickable" data-pool="${pool.name}" role="button" tabindex="0"><span class="tag">${pool.name}</span><h3>${pool.title} 缓存池</h3><p>${usage.blob_count} 个物理对象 · ${usage.artifact_count} 条路由 · ${formatBytes(usage.total_bytes)} · ${usage.total_hits} 次命中</p><p class="source-action">查看内容 →</p></article>`;
   }).join("");
   document.querySelectorAll(".source.clickable").forEach((element) => {
     const open = () => openPool(element.dataset.pool);
@@ -57,8 +57,13 @@ async function loadSourceArtifacts() {
     if (query) params.set("query", query);
     const result = await api(`/api/v1/pools/${encodeURIComponent(pool)}/artifacts?${params}`);
     const shown = Math.min(result.total, 500);
-    $("detail-count").textContent = query ? `匹配 ${result.total} 个对象，显示 ${shown} 个` : `共 ${result.total} 个缓存对象，显示 ${shown} 个`;
-    $("detail-artifacts").innerHTML = result.artifacts.length ? result.artifacts.map((item) => `<tr><td class="path">${escapeHtml(item.path)}</td><td>${formatBytes(item.size)}</td><td>${item.hit_count}</td><td>${new Date(item.fetched_at * 1000).toLocaleString()}</td><td class="upstream">${escapeHtml(item.upstream_url)}</td></tr>`).join("") : '<tr><td colspan="5" class="muted">没有匹配的缓存对象。</td></tr>';
+    const routes = result.route_total ?? result.total;
+    $("detail-count").textContent = query ? `匹配 ${result.total} 个物理对象，覆盖 ${routes} 条路由，显示 ${shown} 个` : `共 ${result.total} 个物理对象，覆盖 ${routes} 条路由，显示 ${shown} 个`;
+    $("detail-artifacts").innerHTML = result.artifacts.length ? result.artifacts.map((item) => {
+      const routeHint = item.route_count > 1 ? ` · ${item.route_count} 条路由` : "";
+      const sourceHint = item.source_count > 1 ? ` · ${item.source_count} 个来源` : "";
+      return `<tr><td class="path">${escapeHtml(item.path)}${routeHint}</td><td>${formatBytes(item.size)}</td><td>${item.hit_count}</td><td>${new Date(item.fetched_at * 1000).toLocaleString()}</td><td class="upstream">${escapeHtml(item.upstream_url)}${sourceHint}</td></tr>`;
+    }).join("") : '<tr><td colspan="5" class="muted">没有匹配的缓存对象。</td></tr>';
   } catch (error) { $("detail-artifacts").innerHTML = `<tr><td colspan="5" class="muted">加载失败：${escapeHtml(error.message)}</td></tr>`; }
 }
 async function refresh() {
@@ -66,7 +71,7 @@ async function refresh() {
   try {
     const [status, sourceData, artifactData] = await Promise.all([api("/api/v1/status"), api("/api/v1/sources"), api("/api/v1/artifacts?limit=20")]);
     state.status = status; state.sources = sourceData.sources;
-    $("artifact-count").textContent = status.cache.artifact_count.toLocaleString();
+    $("artifact-count").textContent = status.cache.blob_count.toLocaleString();
     $("cache-bytes").textContent = formatBytes(status.cache.total_bytes);
     $("cache-hits").textContent = status.cache.total_hits.toLocaleString();
     $("source-count").textContent = "2";
