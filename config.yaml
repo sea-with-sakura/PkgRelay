@@ -9,7 +9,7 @@ client_sync:
 
 # The gateway owns every installed client's Conda configuration.
 client_conda:
-  channels: [conda-forge, pytorch, nvidia, defaults]
+  channels: [conda-forge, defaults]
   channel_priority: strict
 
 sources:

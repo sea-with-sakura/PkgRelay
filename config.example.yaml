@@ -8,7 +8,7 @@ client_sync:
   max_upload_bytes: 21474836480
 # The gateway owns every installed client's Conda configuration.
 client_conda:
-  channels: [conda-forge, pytorch, nvidia, defaults]
+  channels: [conda-forge, defaults]
   channel_priority: strict
 # The web service never mounts user package directories. The host-side
 # import-cache.sh script supplies a temporary /imports/source allow-list.
