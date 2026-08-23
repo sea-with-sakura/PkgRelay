@@ -35,6 +35,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 显式的 HTTPS `--index-url` 会自动转向 PkgRelay。首次下载时网关边回源、边传输、边写入缓存；后续请求命中中央缓存。
 
+客户端会在使用 `pip` 或 Conda 包操作时每 6 小时检查一次服务端版本；有更新时仅刷新 PkgRelay 自己管理的客户端文件，不修改用户环境。
+
 需要同步并清理当前用户下载缓存时：
 
 ```bash

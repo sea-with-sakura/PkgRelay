@@ -10,6 +10,13 @@ client_sync:
 # import-cache.sh script supplies a temporary /imports/source allow-list.
 
 sources:
+  # Conda's standard default channels.
+  defaults:
+    upstreams:
+      - https://repo.anaconda.com/pkgs/main
+      - https://repo.anaconda.com/pkgs/r
+    metadata_ttl_seconds: 600
+
   conda-forge:
     upstreams:
       - https://conda.anaconda.org/conda-forge

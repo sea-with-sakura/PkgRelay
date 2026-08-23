@@ -8,6 +8,12 @@ client_sync:
   max_upload_bytes: 21474836480
 
 sources:
+  defaults:
+    upstreams:
+      - https://repo.anaconda.com/pkgs/main
+      - https://repo.anaconda.com/pkgs/r
+    metadata_ttl_seconds: 600
+
   conda-forge:
     upstreams:
       - https://conda.anaconda.org/conda-forge

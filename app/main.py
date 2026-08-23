@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import ipaddress
+import os
 import shlex
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -68,10 +70,32 @@ def _decode_client_origin(token: str) -> str:
         raise SyncError("Invalid origin token") from exc
 
 
-def _bootstrap_script(settings: Settings, cache_url: str) -> str:
+def _client_revision(settings: Settings) -> str:
+    """Return the deployed client bundle revision.
+
+    A deployment may provide ``PKGRELAY_RELEASE`` with its Git commit.  The
+    content digest remains a reliable fallback for local, uncommitted builds.
+    """
+    release = os.getenv("PKGRELAY_RELEASE", "").strip()
+    if release:
+        return f"git:{release}"
+    digest = hashlib.sha256()
+    client_root = Path(__file__).parents[1] / "client"
+    for name in ("pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh", "client-update.sh"):
+        digest.update(name.encode())
+        digest.update((client_root / name).read_bytes())
+    for source in settings.sources.values():
+        if source.kind == "conda":
+            digest.update(source.name.encode())
+            digest.update("\0".join(source.upstreams).encode())
+    return f"bundle:{digest.hexdigest()[:16]}"
+
+
+def _bootstrap_script(settings: Settings, cache_url: str, revision: str) -> str:
     wrapper = (Path(__file__).parents[1] / "client" / "pip-wrapper.sh").read_text()
     conda_wrapper = (Path(__file__).parents[1] / "client" / "conda-wrapper.sh").read_text()
     cache_sync = (Path(__file__).parents[1] / "client" / "cache-sync.sh").read_text()
+    client_update = (Path(__file__).parents[1] / "client" / "client-update.sh").read_text()
     conda_channels = [
         source.name
         for source in settings.sources.values()
@@ -89,11 +113,18 @@ def _bootstrap_script(settings: Settings, cache_url: str) -> str:
 set -euo pipefail
 
 cache_url={shlex.quote(cache_url)}
+client_revision={shlex.quote(revision)}
 client_dir="${{XDG_DATA_HOME:-$HOME/.local/share}}/pkgrelay"
 legacy_client_dir="${{XDG_DATA_HOME:-$HOME/.local/share}}/conda-cache"
 bashrc="$HOME/.bashrc"
 timestamp=$(date +%Y%m%d%H%M%S)
 state_dir="$client_dir/state"
+update_mode=0
+case "${{1:-}}" in
+  "") ;;
+  --update) update_mode=1 ;;
+  *) echo "Usage: setenv.sh [--update]" >&2; exit 2 ;;
+esac
 
 if [[ -t 1 ]]; then
   C_RESET='\033[0m'; C_BOLD='\033[1m'; C_BLUE='\033[38;5;39m'
@@ -126,7 +157,9 @@ migrate_legacy_client() {{
     rmdir "$legacy_client_dir" 2>/dev/null || true
     migrated=1
   fi
-  [[ "$migrated" == 1 ]] && ok "已迁移旧版客户端配置。"
+  if [[ "$migrated" == 1 ]]; then
+    ok "已迁移旧版客户端配置。"
+  fi
 }}
 
 uninstall_cache_client() {{
@@ -176,6 +209,7 @@ uninstall_cache_client() {{
   fi
 
   rm -f "$client_dir/pip-wrapper.sh" "$client_dir/conda-wrapper.sh" \
+    "$client_dir/client-update.sh" \
     "$client_dir/cache-sync.sh" "$client_dir/client.conf" "$client_dir/conda-channels.conf" "$client_dir/pip-sources.conf"
   rm -f "$state_dir/pip-index.before"
   rmdir "$state_dir" 2>/dev/null || true
@@ -183,24 +217,31 @@ uninstall_cache_client() {{
   ok "已删除当前用户的缓存客户端文件。请执行 exec bash -l 或重新登录以使当前 Shell 生效。"
 }}
 
-title "缓存客户端"
-printf '%b\n' "缓存站：${{C_BOLD}}$cache_url${{C_RESET}}"
-printf '%b\n' "${{C_BOLD}}1) 安装：接入缓存层${{C_RESET}}"
-printf '%b\n' "${{C_BOLD}}2) 卸载：移除缓存层并恢复已记录的配置${{C_RESET}}"
-read -r -p "${{C_YELLOW}}请选择 [1/2]：${{C_RESET}}" setup_action
-case "$setup_action" in
-  1) ;;
-  2) uninstall_cache_client; exit 0 ;;
-  *) skip "无效选择，未做任何修改。"; exit 2 ;;
-esac
+if [[ "$update_mode" == 1 ]]; then
+  setup_action=1
+else
+  title "缓存客户端"
+  printf '%b\n' "缓存站：${{C_BOLD}}$cache_url${{C_RESET}}"
+  printf '%b\n' "${{C_BOLD}}1) 安装：接入缓存层${{C_RESET}}"
+  printf '%b\n' "${{C_BOLD}}2) 卸载：移除缓存层并恢复已记录的配置${{C_RESET}}"
+  read -r -p "${{C_YELLOW}}请选择 [1/2]：${{C_RESET}}" setup_action
+  case "$setup_action" in
+    1) ;;
+    2) uninstall_cache_client; exit 0 ;;
+    *) skip "无效选择，未做任何修改。"; exit 2 ;;
+  esac
+fi
 migrate_legacy_client
 install -d -m 0755 "$client_dir"
 cat > "$client_dir/pip-wrapper.sh" <<'PKGRELAY_WRAPPER'
 {wrapper}PKGRELAY_WRAPPER
-printf 'PKGRELAY_URL=%q\\n' "${{cache_url%/}}" > "$client_dir/client.conf"
+printf 'PKGRELAY_URL=%q\nPKGRELAY_CLIENT_REVISION=%q\n' "${{cache_url%/}}" "$client_revision" > "$client_dir/client.conf"
 cat > "$client_dir/cache-sync.sh" <<'PKGRELAY_SYNC'
 {cache_sync}PKGRELAY_SYNC
 chmod 0755 "$client_dir/cache-sync.sh"
+cat > "$client_dir/client-update.sh" <<'PKGRELAY_UPDATE'
+{client_update}PKGRELAY_UPDATE
+chmod 0755 "$client_dir/client-update.sh"
 if ! grep -Fq '# >>> pkgrelay pip wrapper >>>' "$bashrc" 2>/dev/null; then
   [[ -f "$bashrc" ]] && cp -a "$bashrc" "$bashrc.pkgrelay-backup.$timestamp"
   cat >> "$bashrc" <<PKGRELAY_BASHRC
@@ -250,11 +291,17 @@ if [[ ! -f "$state_dir/pip-index.before" ]]; then
 fi
 python3 -m pip config --user set global.index-url "${{cache_url%/}}/get/pypi/pypi/simple"
 ok "已接入 pip 缓存层。"
-read -r -p "同步并清理当前用户本地包缓存？ [y/N] " cleanup_action
-if [[ "$cleanup_action" =~ ^[Yy]$ ]]; then
-  "$client_dir/cache-sync.sh" --prune
+if [[ "$update_mode" != 1 ]]; then
+  read -r -p "同步并清理当前用户本地包缓存？ [y/N] " cleanup_action
+  if [[ "$cleanup_action" =~ ^[Yy]$ ]]; then
+    "$client_dir/cache-sync.sh" --prune
+  fi
 fi
-ok "执行：source $client_dir/pip-wrapper.sh && source $client_dir/conda-wrapper.sh"
+if [[ "$update_mode" == 1 ]]; then
+  ok "PkgRelay 客户端已更新至 $client_revision。"
+else
+  ok "执行：source $client_dir/pip-wrapper.sh && source $client_dir/conda-wrapper.sh"
+fi
 '''
 
 
@@ -329,10 +376,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/bootstrap/setenv.sh", include_in_schema=False)
     async def bootstrap_setenv(request: Request) -> Response:
         return Response(
-            _bootstrap_script(settings, str(request.base_url).rstrip("/")),
+            _bootstrap_script(settings, str(request.base_url).rstrip("/"), _client_revision(settings)),
             media_type="text/x-shellscript",
             headers={"Content-Disposition": "attachment; filename=setenv.sh", "Cache-Control": "no-store"},
         )
+
+    @app.get("/bootstrap/manifest.json", include_in_schema=False)
+    async def bootstrap_manifest(request: Request) -> dict[str, object]:
+        base_url = str(request.base_url).rstrip("/")
+        return {
+            "revision": _client_revision(settings),
+            "installer": f"{base_url}/bootstrap/setenv.sh",
+            "update_interval_seconds": 21600,
+        }
 
     @app.get("/api/v1/status")
     async def status() -> dict[str, object]:

@@ -16,6 +16,10 @@ fi
 
 : "${PKGRELAY_URL:=http://127.0.0.1:45612}"
 _pkgrelay_conda_channels="${_pkgrelay_client_dir}/conda-channels.conf"
+if [[ -r "${_pkgrelay_client_dir}/client-update.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "${_pkgrelay_client_dir}/client-update.sh"
+fi
 
 _pkgrelay_has_override_channels() {
   local argument
@@ -43,6 +47,9 @@ fi
 _pkgrelay_run_conda() {
   local command_name="$1"
   shift
+  if declare -F _pkgrelay_client_maybe_update >/dev/null; then
+    _pkgrelay_client_maybe_update
+  fi
   local -a channels=() arguments=("${command_name}" "$@")
   local channel
 

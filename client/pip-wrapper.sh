@@ -5,7 +5,8 @@
 [[ -n "${BASH_VERSION:-}" ]] || return 0
 
 _pkgrelay_wrapper_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-_pkgrelay_settings="${PKGRELAY_CLIENT_DIR:-${_pkgrelay_wrapper_dir}}/client.conf"
+_pkgrelay_client_dir="${PKGRELAY_CLIENT_DIR:-${_pkgrelay_wrapper_dir}}"
+_pkgrelay_settings="${_pkgrelay_client_dir}/client.conf"
 
 if [[ "${PKGRELAY_IGNORE_FILE_CONFIG:-0}" != "1" && -r "${_pkgrelay_settings}" ]]; then
   # The bootstrap-generated settings contain only shell assignments.
@@ -14,6 +15,10 @@ if [[ "${PKGRELAY_IGNORE_FILE_CONFIG:-0}" != "1" && -r "${_pkgrelay_settings}" ]
 fi
 
 : "${PKGRELAY_URL:=http://127.0.0.1:45612}"
+if [[ -r "${_pkgrelay_client_dir}/client-update.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "${_pkgrelay_client_dir}/client-update.sh"
+fi
 
 _pkgrelay_rewrite_url() {
   local requested_url="${1%/}" token
@@ -33,6 +38,9 @@ _pkgrelay_rewrite_url() {
 _pkgrelay_pip() {
   local executable="$1"
   shift
+  if declare -F _pkgrelay_client_maybe_update >/dev/null; then
+    _pkgrelay_client_maybe_update
+  fi
   local rewritten=() argument next_url replacement
   while (($#)); do
     argument="$1"

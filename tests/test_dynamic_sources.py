@@ -4,6 +4,7 @@ import pytest
 
 from app.main import DynamicSourceError, _decode_dynamic_upstream
 from app.store import CacheStore
+from app.sync import ClientSync
 
 
 def token(url: str) -> str:
@@ -57,3 +58,15 @@ def test_identical_artifacts_share_one_content_addressed_blob(tmp_path):
     assert store.statistics()["blob_count"] == 1
     assert store.statistics()["total_bytes"] == len(b"same-wheel")
     store.close()
+
+
+def test_conda_sync_derives_an_unconfigured_channel_from_archive_url():
+    source_id, path, upstream, final_url = ClientSync._dynamic_conda_destination(
+        "demo-1.0-0.conda",
+        "https://packages.example.test/conda/label/stable/linux-64/demo-1.0-0.conda",
+    )
+
+    assert source_id.startswith("conda-external-")
+    assert path == "linux-64/demo-1.0-0.conda"
+    assert upstream == "https://packages.example.test/conda/label/stable"
+    assert final_url.endswith("/linux-64/demo-1.0-0.conda")
