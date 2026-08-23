@@ -87,7 +87,14 @@ class Gateway:
             )
             reused = self._reuse_by_url(source, path, metadata, urls)
             if reused:
-                return reused
+                if self._fresh(reused.record, metadata, source):
+                    return reused
+                # A matching blob can be reused across a legacy/static source
+                # and a dynamically mapped Channel.  Metadata still honours
+                # its TTL: retain the ETag/Last-Modified record and revalidate
+                # it below when that shared copy is stale.
+                record = reused.record
+                target = reused.file_path
             return await self._fetch(source, path, metadata, record, target, urls)
 
     async def get_url(
@@ -231,10 +238,10 @@ class Gateway:
         metadata: bool,
         urls: tuple[tuple[str, str], ...],
     ) -> CacheResult | None:
-        if metadata:
-            return None
         for requested_url, _ in urls:
-            reusable = self.store.find_by_upstream_url(source.pool, requested_url)
+            reusable = self.store.find_by_upstream_url(
+                source.pool, requested_url, metadata=metadata
+            )
             if not reusable:
                 continue
             reused = self.store.upsert(
@@ -245,7 +252,7 @@ class Gateway:
                 sha256=reusable.sha256,
                 size=reusable.size,
                 content_type=reusable.content_type,
-                metadata=False,
+                metadata=metadata,
                 etag=reusable.etag,
                 last_modified=reusable.last_modified,
             )

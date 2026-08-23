@@ -161,19 +161,22 @@ class CacheStore:
         ).fetchone()
         return ArtifactRecord(**dict(row)) if row else None
 
-    def find_by_upstream_url(self, pool: str, upstream_url: str) -> ArtifactRecord | None:
-        """Return a package already registered for the exact upstream URL.
+    def find_by_upstream_url(
+        self, pool: str, upstream_url: str, *, metadata: bool = False
+    ) -> ArtifactRecord | None:
+        """Return an artifact already registered for the exact upstream URL.
 
         This is the only cross-source reuse rule. A filename alone is not an
         identity: distinct channels can legitimately publish different bytes
-        under the same filename.
+        under the same filename.  Metadata is eligible too, but callers still
+        apply its normal TTL and conditionally revalidate stale copies.
         """
         row = self.db.execute(
             """SELECT * FROM artifacts
-               WHERE pool = ? AND is_metadata = 0
+               WHERE pool = ? AND is_metadata = ?
                  AND (upstream_url = ? OR final_url = ?)
                ORDER BY last_accessed_at DESC LIMIT 1""",
-            (pool, upstream_url, upstream_url),
+            (pool, int(metadata), upstream_url, upstream_url),
         ).fetchone()
         return ArtifactRecord(**dict(row)) if row else None
 

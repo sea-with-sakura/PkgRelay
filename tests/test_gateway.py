@@ -67,6 +67,27 @@ def test_conda_reuses_imported_archive_by_exact_upstream_url(tmp_path: Path):
     store.close()
 
 
+def test_conda_reuses_fresh_repodata_by_exact_upstream_url(tmp_path: Path):
+    store = CacheStore(tmp_path / "cache")
+    upstream = "https://conda.anaconda.org/conda-forge"
+    store.store_bytes(
+        source_id="conda-forge",
+        path="linux-64/repodata.json.zst",
+        content=b"repodata",
+        upstream_url=f"{upstream}/linux-64/repodata.json.zst",
+        metadata=True,
+    )
+    gateway = Gateway(store)
+    source = SourceConfig("conda-external-test", (upstream,))
+
+    result = asyncio.run(gateway.get(source, "linux-64/repodata.json.zst"))
+
+    assert result.cache_status == "REUSED"
+    assert result.file_path.read_bytes() == b"repodata"
+    assert store.get("conda-external-test", "linux-64/repodata.json.zst") is not None
+    store.close()
+
+
 def test_gateway_streams_pypi_artifact_and_publishes_it_afterward(tmp_path: Path):
     upstream_root = tmp_path / "upstream"
     (upstream_root / "packages").mkdir(parents=True)
