@@ -37,6 +37,27 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 客户端不保留新的下载缓存：pip 自动使用 `--no-cache-dir`；Conda 在专用临时目录下载、复制进环境后立即清理。环境本身仍保留在本机。
 
+### 已验证用法
+
+安装客户端后，以下命令无需手写网关地址，会经过 PkgRelay：
+
+```bash
+# Conda：默认 conda-forge + defaults
+conda create -n demo python=3.12
+conda install -n demo numpy
+
+# Conda：显式 Channel 也会经由网关
+conda create -n torch-env python=3.12 -c pytorch -c conda-forge
+
+# pip：默认 PyPI
+pip install gpustat
+
+# pip：PyTorch CUDA 官方索引；地址会自动改写为网关路径
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+```
+
+不要把 `--index-url` 改成网关地址；`pip` 包装器会自动处理。首次请求由网关回源并缓存，后续机器请求同一文件时直接走内网缓存。
+
 需要手动同步当前用户下载缓存时：
 
 ```bash
