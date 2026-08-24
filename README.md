@@ -1,90 +1,205 @@
-# PkgRelay
+<p align="center">
+  <img src="app/web/pkgrelay-icon.png" width="128" alt="PkgRelay logo">
+</p>
 
-内网 Conda / pip 包缓存中转站。Conda 和 pip 继续负责依赖解析与版本选择；PkgRelay 负责回源、去重缓存和内网分发。
+<h1 align="center">PkgRelay</h1>
 
-缓存只有两个池：`conda` 与 `pip`。不同上游只是来源记录，不复制同内容的包。
+<p align="center">A self-hosted, LAN-first cache relay for Conda and pip packages.</p>
 
-## 启动
+<p align="center">
+  <img src="https://img.shields.io/badge/self--hosted-LAN%20package%20relay-1677ff?style=flat-square" alt="Self hosted">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/Conda-supported-44A833?style=flat-square&logo=anaconda&logoColor=white" alt="Conda">
+  <img src="https://img.shields.io/badge/pip-supported-3775A9?style=flat-square&logo=pypi&logoColor=white" alt="pip">
+  <img src="https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
+</p>
+
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> · <a href="#quick-start">Quick start</a> · <a href="#client-setup">Client setup</a> · <a href="#architecture">Architecture</a>
+</p>
+
+---
+
+PkgRelay makes the gateway the durable package cache. Conda and pip still resolve dependencies and select versions; PkgRelay fetches a missing artifact once, stores it by SHA-256, then distributes it over the LAN.
+
+## Highlights
+
+- **Two physical pools** — one shared `conda` pool and one shared `pip` pool.
+- **Content-addressed storage** — identical artifacts share a Blob across routes.
+- **Transparent commands** — users keep normal `conda`, `pip`, and `pip3` workflows.
+- **External pip indexes** — CUDA commands keep their original `--index-url`; the client rewrites their transport path through PkgRelay.
+- **Streaming cache misses** — large wheels are forwarded while the gateway writes them to cache.
+- **Transient client downloads** — pip does not retain a cache; Conda uses and removes a dedicated staging directory after package operations.
+- **Web console** — browse cache pools, Conda channels, package files, size, and hit counts.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  C[Conda / pip client] -->|normal install command| G[PkgRelay gateway]
+  G -->|cache hit| D[(Shared SHA-256 Blob pools)]
+  G -->|cache miss| U[Configured upstream or external HTTPS index]
+  U --> G
+  G -->|stream / serve| C
+  G -->|publish once| D
+```
+
+```mermaid
+sequenceDiagram
+  participant A as First client
+  participant G as PkgRelay
+  participant U as Upstream
+  participant B as Later client
+  A->>G: Request package
+  G->>U: Cache miss: fetch once
+  U-->>G: Package bytes
+  G-->>A: Stream immediately
+  G->>G: Verify SHA-256 and publish Blob
+  B->>G: Request same package
+  G-->>B: LAN cache hit
+```
+
+## Quick start
+
+### Deploy the gateway
 
 ```bash
+git clone https://github.com/sea-with-sakura/PkgRelay.git
+cd PkgRelay
 cp config.example.yaml config.yaml
 docker compose up -d --build
 curl http://127.0.0.1:45612/healthz
 ```
 
-服务默认监听 `0.0.0.0:45612`，网页为 `http://<服务器IP>:45612/`。
-缓存数据默认绑定在宿主机 `/4090data1/pkgrelay/data`，便于迁移和备份。
+Open the web console at `http://<gateway-ip>:45612/`.
 
-## 客户端
+The default Compose file mounts central data at `/4090data1/pkgrelay/data`. Change that host path in `docker-compose.yml` if your storage layout differs.
 
-每台机器上的每个用户执行：
+## Client setup
+
+Run once for each user in a Bash session:
 
 ```bash
-wget -qO /tmp/setenv.sh http://172.16.8.251:45612/bootstrap/setenv.sh && bash /tmp/setenv.sh && exec bash -l
+wget -qO /tmp/setenv.sh http://<gateway-ip>:45612/bootstrap/setenv.sh && bash /tmp/setenv.sh && exec bash -l
 ```
 
-之后照常使用：
+Choose **Install**. PkgRelay backs up the original user `.condarc` once and restores it on **Uninstall**.
+
+## Verified commands
+
+After setup, these commands use the gateway without writing its address into the command.
 
 ```bash
-conda create -n demo python=3.12
-pip install gpustat
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-```
-
-显式的 HTTPS `--index-url` 会自动转向 PkgRelay。首次下载时网关边回源、边传输、边写入缓存；后续请求命中中央缓存。
-
-安装客户端后，网关会接管当前用户的 `~/.condarc`：Channel 列表、优先级和公共源均由网关下发，用户原有配置不参与 Conda 解析。原文件会备份；选择卸载即可原样恢复。中转站优先使用清华 TUNA 镜像，失败时回退官方源。
-
-客户端不保留新的下载缓存：pip 自动使用 `--no-cache-dir`；Conda 在专用临时目录下载、复制进环境后立即清理。环境本身仍保留在本机。
-
-### 已验证用法
-
-安装客户端后，以下命令无需手写网关地址，会经过 PkgRelay：
-
-```bash
-# Conda：默认 conda-forge + defaults
+# Conda: configured defaults and conda-forge
 conda create -n demo python=3.12
 conda install -n demo numpy
 
-# Conda：显式 Channel 也会经由网关
+# Conda: explicit channels are also routed by the gateway
 conda create -n torch-env python=3.12 -c pytorch -c conda-forge
 
-# pip：默认 PyPI
+# pip: default PyPI route
 pip install gpustat
 
-# pip：PyTorch CUDA 官方索引；地址会自动改写为网关路径
+# pip: keep the official CUDA index; PkgRelay rewrites transport only
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
-不要把 `--index-url` 改成网关地址；`pip` 包装器会自动处理。首次请求由网关回源并缓存，后续机器请求同一文件时直接走内网缓存。
+Do **not** manually replace `--index-url` with a gateway URL. The first request may fetch upstream; later clients receive the same file from the LAN cache.
 
-需要手动同步当前用户下载缓存时：
+> Use `pip` or `pip3` for gateway routing. `python -m pip` inherits the no-local-cache setting from the current Bash session, but does not use the Bash URL-rewrite function.
+
+## Cache lifecycle
+
+```mermaid
+flowchart LR
+  P[pip install] --> N[No pip cache]
+  C[conda create / install] --> S[Dedicated temporary package directory]
+  S --> E[Copy files into local environment]
+  E --> X[Remove temporary package directory]
+  G[(PkgRelay gateway)] -->|keeps the durable archive| G
+```
+
+| Component | Persistent location | Notes |
+| --- | --- | --- |
+| Gateway packages and metadata | Host directory mounted at `/data` | Shared cache of record. |
+| Conda / pip environments | Client machine | Installed environments, not download cache. |
+| New pip cache | None | The client exports `PIP_NO_CACHE_DIR=1`. |
+| New Conda package cache | None after transaction | Staging directory is cleared after package-changing commands. |
+
+Existing legacy directories such as `miniconda3/pkgs` are not deleted automatically: older environments may use symlinks into them.
+
+## Configure upstreams
+
+All source policy lives in `config.yaml`; clients only talk to PkgRelay.
+
+```yaml
+sources:
+  conda-forge:
+    upstreams:
+      - https://your-conda-mirror/anaconda/cloud/conda-forge
+      - https://conda.anaconda.org/conda-forge
+    metadata_ttl_seconds: 600
+    fallback_on_not_found: true
+
+  pypi:
+    kind: pypi
+    upstreams:
+      - https://your-pypi-mirror
+      - https://pypi.org
+    metadata_ttl_seconds: 600
+    fallback_on_not_found: true
+```
+
+Package archives remain immutable once cached. Conda and PyPI index metadata refresh after their configured TTL, using HTTP validators where available.
+
+## Import existing packages
+
+Run on the gateway host. The source directory is never changed.
 
 ```bash
-~/.local/share/pkgrelay/cache-sync.sh --sync   # 仅上传，不删除本地归档
+./import/import-cache.sh conda /path/to/miniconda3/pkgs
+./import/import-cache.sh pypi /path/to/pip-cache
+./import/import-cache.sh --dry-run pypi /path/to/pip-cache
+```
+
+Migrate a user's old archives before pruning them:
+
+```bash
+~/.local/share/pkgrelay/cache-sync.sh --sync
 ~/.local/share/pkgrelay/cache-sync.sh --prune
 ```
 
-`--prune` 会先逐个确认或上传，再清理网关已存在或刚上传成功的本地下载归档；不会删除任何 Conda 环境或已安装的 pip 包。
-
-## 导入已有缓存
-
-在缓存服务器上运行，不会修改原目录：
+## Operations
 
 ```bash
-./import/import-cache.sh conda /home/sakura/miniconda3/pkgs
-./import/import-cache.sh pypi /home/sakura/.cache/pip
-```
-
-可加 `--dry-run` 预览。生产环境建议使用 TLS，并只向可信内网开放端口。
-
-## 重置旧缓存
-
-本次架构不迁移旧的动态 Conda 路由。确认不再需要旧缓存后，在服务端执行：
-
-```bash
-./reset-cache.sh --yes
 ./rebuild.sh
+curl http://127.0.0.1:45612/healthz
+./reset-cache.sh --yes  # destructively resets central cache only
 ```
 
-该脚本只删除宿主机 `/4090data1/pkgrelay/data` 内的缓存和数据库。
+Avoid rebuilding while large downloads are active: recreating the container briefly interrupts in-flight connections.
+
+## Security and scope
+
+- Designed for a trusted LAN. Restrict port `45612` or add TLS/reverse proxy for wider deployment.
+- Dynamic **HTTPS** pip indexes are accepted for vendor/CUDA indexes.
+- Conda channels must be declared in `config.yaml`; PkgRelay is not a generic Conda proxy.
+- PkgRelay never chooses versions or dependencies. Conda and pip remain the authorities.
+
+## Project layout
+
+```text
+app/       FastAPI gateway, cache store, importer, and web console
+client/    Bootstrap installer and Bash client wrappers
+import/    Host-side import utility
+nginx/     Optional edge reverse-proxy configuration
+tests/     Gateway, cache, import, and dashboard tests
+```
+
+## Contributing
+
+Issues and pull requests are welcome. Please preserve the two-pool, content-addressed storage model and add tests for behavior changes where practical.
+
+## License
+
+No license has been selected yet.
