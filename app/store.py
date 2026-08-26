@@ -73,6 +73,11 @@ class CacheStore:
         self.db.row_factory = sqlite3.Row
         self._published_paths: dict[tuple[str, str], Path] = {}
         self.db.execute("PRAGMA journal_mode=WAL")
+        # Package archives are already atomically published before their
+        # metadata is committed.  Hit/usage counters may lose only the most
+        # recent transaction after a power loss, so avoid an HDD fsync on
+        # every cache hit while retaining WAL consistency.
+        self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.executescript(
             """
@@ -121,6 +126,27 @@ class CacheStore:
                 created_at REAL NOT NULL,
                 last_seen_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS clients (
+                client_id TEXT PRIMARY KEY,
+                machine TEXT NOT NULL,
+                username TEXT NOT NULL,
+                last_ip TEXT NOT NULL,
+                first_seen_at REAL NOT NULL,
+                last_seen_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS client_usage_daily (
+                day TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                downloads INTEGER NOT NULL DEFAULT 0,
+                bytes_served INTEGER NOT NULL DEFAULT 0,
+                cache_hits INTEGER NOT NULL DEFAULT 0,
+                bytes_saved INTEGER NOT NULL DEFAULT 0,
+                cache_misses INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (day, client_id),
+                FOREIGN KEY (client_id) REFERENCES clients(client_id)
+            );
+            CREATE INDEX IF NOT EXISTS client_usage_daily_client_idx
+              ON client_usage_daily(client_id, day);
             """
         )
         self.db.commit()
@@ -478,6 +504,79 @@ class CacheStore:
             (project,),
         ).fetchall()
         yield from rows
+
+    def register_client(self, client_id: str, machine: str, username: str, ip_address: str) -> None:
+        """Register the opaque client id used to attribute package downloads."""
+        now = time.time()
+        self.db.execute(
+            """INSERT INTO clients (client_id, machine, username, last_ip, first_seen_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(client_id) DO UPDATE SET
+                 machine=excluded.machine, username=excluded.username,
+                 last_ip=excluded.last_ip, last_seen_at=excluded.last_seen_at""",
+            (client_id, machine, username, ip_address, now, now),
+        )
+        self.db.commit()
+
+    def record_client_download(
+        self, client_id: str, *, size: int, cache_status: str, ip_address: str
+    ) -> None:
+        """Add one installable archive transfer to the daily client total.
+
+        ``bytes_saved`` deliberately counts only archive bytes served from an
+        existing central object (HIT or REUSED).  A first MISS still reaches
+        the client, but it did not avoid an upstream transfer.
+        """
+        now = time.time()
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        hit = int(cache_status in {"HIT", "REUSED"})
+        self.db.execute(
+            "UPDATE clients SET last_ip = ?, last_seen_at = ? WHERE client_id = ?",
+            (ip_address, now, client_id),
+        )
+        self.db.execute(
+            """INSERT INTO client_usage_daily
+               (day, client_id, downloads, bytes_served, cache_hits, bytes_saved, cache_misses)
+               VALUES (?, ?, 1, ?, ?, ?, ?)
+               ON CONFLICT(day, client_id) DO UPDATE SET
+                 downloads=downloads + 1,
+                 bytes_served=bytes_served + excluded.bytes_served,
+                 cache_hits=cache_hits + excluded.cache_hits,
+                 bytes_saved=bytes_saved + excluded.bytes_saved,
+                 cache_misses=cache_misses + excluded.cache_misses""",
+            (day, client_id, max(size, 0), hit, max(size, 0) * hit, 1 - hit),
+        )
+        self.db.commit()
+
+    def client_usage(self, days: int = 30) -> dict[str, object]:
+        """Return aggregated usage for the dashboard without per-file logs."""
+        days = min(max(days, 1), 3650)
+        since = time.strftime("%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
+        totals = self.db.execute(
+            """SELECT COUNT(DISTINCT client_id) AS client_count,
+                      COALESCE(SUM(downloads), 0) AS downloads,
+                      COALESCE(SUM(bytes_served), 0) AS bytes_served,
+                      COALESCE(SUM(cache_hits), 0) AS cache_hits,
+                      COALESCE(SUM(bytes_saved), 0) AS bytes_saved
+               FROM client_usage_daily WHERE day >= ?""",
+            (since,),
+        ).fetchone()
+        clients = self.db.execute(
+            """SELECT c.machine, c.username, c.last_ip, c.last_seen_at,
+                      SUM(u.downloads) AS downloads, SUM(u.bytes_served) AS bytes_served,
+                      SUM(u.cache_hits) AS cache_hits, SUM(u.bytes_saved) AS bytes_saved
+               FROM client_usage_daily u JOIN clients c ON c.client_id = u.client_id
+               WHERE u.day >= ?
+               GROUP BY u.client_id
+               ORDER BY bytes_served DESC, c.last_seen_at DESC""",
+            (since,),
+        ).fetchall()
+        machine_count = len({str(row["machine"]) for row in clients})
+        return {
+            "days": days,
+            "totals": {**dict(totals), "machine_count": machine_count},
+            "clients": [dict(row) for row in clients],
+        }
 
     def statistics(self) -> dict[str, object]:
         totals = self.db.execute(

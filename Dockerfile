@@ -7,7 +7,9 @@ COPY app ./app
 COPY client ./client
 COPY config.example.yaml ./config.example.yaml
 
+ARG PKGRELAY_CLIENT_VERSION=dev
 ENV PKGRELAY_CONFIG=/config/config.yaml
+ENV PKGRELAY_CLIENT_VERSION=${PKGRELAY_CLIENT_VERSION}
 VOLUME ["/data", "/config"]
 EXPOSE 8080
 CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]

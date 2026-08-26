@@ -30,7 +30,9 @@ PkgRelay makes the gateway the durable package cache. Conda and pip still resolv
 - **External pip indexes** — CUDA commands keep their original `--index-url`; the client rewrites their transport path through PkgRelay.
 - **Streaming cache misses** — large wheels are forwarded while the gateway writes them to cache.
 - **Transient client downloads** — pip does not retain a cache; Conda uses and removes a dedicated staging directory after package operations.
-- **Web console** — browse cache pools, Conda channels, package files, size, and hit counts.
+- **Fast cache hits** — cached Blobs are handed to a dedicated static delivery process; first misses still stream through the gateway.
+- **Web console** — browse cache pools, Conda channels, package files, size, hit counts, and usage.
+- **Usage summary** — aggregate package downloads, LAN distribution, hit rate, and avoided upstream traffic by machine and user.
 
 ## Architecture
 
@@ -73,7 +75,7 @@ curl http://127.0.0.1:45612/healthz
 
 Open the web console at `http://<gateway-ip>:45612/`.
 
-The default Compose file mounts central data at `/4090data1/pkgrelay/data`. Change that host path in `docker-compose.yml` if your storage layout differs.
+The default Compose file mounts central data at `/4090data1/pkgrelay/data`. Change that host path in `docker-compose.yml` if your storage layout differs. The gateway and static delivery process use Linux Docker host networking to avoid bridge/NAT limits; clients still configure only port `45612` and follow cache-hit redirects automatically.
 
 ## Client setup
 
@@ -83,7 +85,13 @@ Run once for each user in a Bash session:
 wget -qO /tmp/setenv.sh http://<gateway-ip>:45612/bootstrap/setenv.sh && bash /tmp/setenv.sh && exec bash -l
 ```
 
-Choose **Install**. PkgRelay backs up the original user `.condarc` once and restores it on **Uninstall**.
+Choose **Install**. PkgRelay backs up the original user `.condarc` once and restores it on **Uninstall**. It also creates a random telemetry-only client id and registers the current machine and user; existing clients can run this command once again to enable usage reporting.
+
+Clients check the gateway version at a low frequency when `conda`, `pip`, or `pip3` is used. If a newer client is published, the terminal prints the same one-line setup command; rerun it to update without interrupting the current install.
+
+## Usage dashboard
+
+The home page shows a rolling 30-day summary of active users, active machines, LAN-distributed bytes, and upstream traffic avoided through cache hits. Only installable package archives are counted; Conda `repodata` and pip `simple` index requests are excluded.
 
 ## Verified commands
 
@@ -179,6 +187,8 @@ curl http://127.0.0.1:45612/healthz
 
 Avoid rebuilding while large downloads are active: recreating the container briefly interrupts in-flight connections.
 
+Use `./rebuild.sh` to publish updates. It embeds the current Git commit in the gateway so older clients can detect a newer release.
+
 ## Security and scope
 
 - Designed for a trusted LAN. Restrict port `45612` or add TLS/reverse proxy for wider deployment.
@@ -192,7 +202,6 @@ Avoid rebuilding while large downloads are active: recreating the container brie
 app/       FastAPI gateway, cache store, importer, and web console
 client/    Bootstrap installer and Bash client wrappers
 import/    Host-side import utility
-nginx/     Optional edge reverse-proxy configuration
 tests/     Gateway, cache, import, and dashboard tests
 ```
 

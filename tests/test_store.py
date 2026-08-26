@@ -55,20 +55,20 @@ def test_pool_blob_search_groups_duplicate_routes(tmp_path: Path):
     store = CacheStore(tmp_path)
     store.store_bytes(
         source_id="conda-forge",
-        path="linux-64/repodata.json.zst",
-        content=b"same-index",
-        upstream_url="https://conda.anaconda.org/conda-forge/linux-64/repodata.json.zst",
-        metadata=True,
+        path="linux-64/demo-1.0-0.conda",
+        content=b"same-package",
+        upstream_url="https://conda.anaconda.org/conda-forge/linux-64/demo-1.0-0.conda",
+        metadata=False,
     )
     store.store_bytes(
         source_id="conda-external-example",
-        path="linux-64/repodata.json.zst",
-        content=b"same-index",
-        upstream_url="https://conda.anaconda.org/conda-forge/linux-64/repodata.json.zst",
-        metadata=True,
+        path="linux-64/demo-1.0-0.conda",
+        content=b"same-package",
+        upstream_url="https://conda.anaconda.org/conda-forge/linux-64/demo-1.0-0.conda",
+        metadata=False,
     )
 
-    total, route_total, blobs = store.search_pool_blobs("conda", "repodata.json.zst")
+    total, route_total, blobs = store.search_pool_blobs("conda", "demo-1.0-0.conda")
 
     assert total == 1
     assert route_total == 2

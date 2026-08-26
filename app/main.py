@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import ipaddress
+import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigurationError, Settings, SourceConfig, load_settings
@@ -75,12 +78,31 @@ def _conda_client_config(settings: Settings, cache_url: str) -> str:
     lines = ["channels:"]
     lines.extend(f"  - {name}" for name in channels)
     lines.append(f"channel_priority: {settings.client_conda_channel_priority}")
-    lines.append("always_copy: true")
     lines.append("default_channels:")
     lines.extend(f"  - {base}/{name}" for name in defaults)
     lines.append("custom_channels:")
     lines.extend(f"  {name}: {base}" for name in custom)
     return "\n".join(lines) + "\n"
+
+
+_CLIENT_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+_CLIENT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _client_id(client_id: str) -> str:
+    if not _CLIENT_ID_PATTERN.fullmatch(client_id):
+        raise HTTPException(status_code=400, detail="Invalid client id")
+    return client_id
+
+
+def _conda_client_config_for_client(settings: Settings, cache_url: str, client_id: str = "") -> str:
+    """Use a client-specific route only when telemetry is available."""
+    config = _conda_client_config(settings, cache_url)
+    if not client_id:
+        return config
+    base = f"{cache_url.rstrip('/')}/client/{_client_id(client_id)}/get"
+    legacy_base = f"{cache_url.rstrip('/')}/get"
+    return config.replace(legacy_base, base)
 
 
 def _decode_client_origin(token: str) -> str:
@@ -106,6 +128,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway = Gateway(store)
     pypi_gateway = PypiGateway(store, gateway, settings.sources)
     client_sync = ClientSync(settings, store)
+    client_version = os.environ.get("PKGRELAY_CLIENT_VERSION", "dev")
+    static_delivery_port = int(os.environ.get("PKGRELAY_STATIC_DELIVERY_PORT", "0") or 0)
 
     def dynamic_source(source_id: str) -> SourceConfig | None:
         row = store.get_dynamic_pypi_source(source_id)
@@ -133,10 +157,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return SourceConfig(name=PIP_IMPORT_SOURCE, upstreams=("https://pypi.org",), kind="pypi")
         return dynamic_source(source_id)
 
-    async def pypi_index_response(request: Request, source: SourceConfig, project: str) -> HTMLResponse:
+    def client_ip(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
+
+    def record_download(client_id: str | None, request: Request, size: int, cache_status: str) -> None:
+        if client_id and request.method == "GET":
+            store.record_client_download(
+                client_id, size=size, cache_status=cache_status, ip_address=client_ip(request)
+            )
+
+    async def cached_blob_body(file_path: Path):
+        """Read cached blobs in large blocks instead of Starlette's 64 KiB default.
+
+        The gateway runs directly on the LAN host network.  A 4 MiB block
+        avoids the per-chunk scheduling cost that limited cached transfers to
+        ~20 MB/s on this host, while a miss continues to use its existing
+        upstream-to-client streaming path.
+        """
+        stream = file_path.open("rb")
+        try:
+            while chunk := await asyncio.to_thread(stream.read, 4 * 1024 * 1024):
+                yield chunk
+        finally:
+            stream.close()
+
+    def cached_blob_response(request: Request, result, headers: dict[str, str]):
+        headers = {**headers, "Content-Length": str(result.record.size)}
+        if static_delivery_port and request.url.hostname:
+            redirect_headers = dict(headers)
+            redirect_headers.pop("Content-Length", None)
+            return RedirectResponse(
+                f"{request.url.scheme}://{request.url.hostname}:{static_delivery_port}/blobs/"
+                f"{result.record.pool}/{result.record.sha256}",
+                status_code=307,
+                headers=redirect_headers,
+            )
+        if request.method == "HEAD":
+            return Response(
+                status_code=200,
+                media_type=result.record.content_type or "application/octet-stream",
+                headers=headers,
+            )
+        return StreamingResponse(
+            cached_blob_body(result.file_path),
+            media_type=result.record.content_type or "application/octet-stream",
+            headers=headers,
+        )
+
+    async def tracked_body(client_id: str | None, request: Request, result: StreamingCacheResult):
+        completed = False
+        async for chunk in result.body:
+            yield chunk
+        completed = True
+        if completed:
+            record_download(client_id, request, result.content_length or 0, result.cache_status)
+
+    async def pypi_index_response(
+        request: Request, source: SourceConfig, project: str, client_id: str | None = None
+    ) -> HTMLResponse:
         try:
             content, cache_status = await pypi_gateway.simple_index(
-                source, project, str(request.base_url).rstrip("/")
+                source,
+                project,
+                str(request.base_url).rstrip("/"),
+                f"/client/{client_id}" if client_id else "",
             )
         except InvalidProject as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -177,15 +261,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Content-Disposition": "attachment; filename=setenv.sh", "Cache-Control": "no-store"},
         )
 
+    @app.get("/bootstrap/client/version", include_in_schema=False)
+    async def bootstrap_client_version() -> Response:
+        return Response(client_version + "\n", media_type="text/plain", headers={"Cache-Control": "no-store"})
+
     @app.get("/bootstrap/client/{name}", include_in_schema=False)
-    async def bootstrap_client_file(request: Request, name: str) -> Response:
+    async def bootstrap_client_file(request: Request, name: str, client_id: str = "") -> Response:
         if name == "condarc.yaml":
             return Response(
-                _conda_client_config(settings, str(request.base_url).rstrip("/")),
+                _conda_client_config_for_client(
+                    settings, str(request.base_url).rstrip("/"), client_id
+                ),
                 media_type="text/plain",
                 headers={"Cache-Control": "no-store"},
             )
-        allowed = {"pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh"}
+        allowed = {"pip-wrapper.sh", "conda-wrapper.sh", "cache-sync.sh", "update-check.sh"}
         if name not in allowed:
             raise HTTPException(status_code=404, detail="Unknown client file")
         return Response(
@@ -202,6 +292,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "import_mode": "host-side-only",
             "cache": store.statistics(),
         }
+
+    @app.post("/api/v1/clients/register")
+    async def register_client(request: Request, client_id: str, machine: str, username: str) -> dict[str, str]:
+        client_id = _client_id(client_id)
+        if not _CLIENT_LABEL_PATTERN.fullmatch(machine) or not _CLIENT_LABEL_PATTERN.fullmatch(username):
+            raise HTTPException(status_code=400, detail="Invalid machine or username")
+        store.register_client(client_id, machine, username, client_ip(request))
+        return {"status": "registered"}
+
+    @app.get("/api/v1/usage")
+    async def usage(days: int = 30) -> dict[str, object]:
+        return store.client_usage(days)
 
     @app.get("/api/v1/sources")
     async def list_sources() -> dict[str, object]:
@@ -302,15 +404,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/get/pypi/{source_id}/simple/{project}/")
     @app.get("/get/pypi/{source_id}/simple/{project}")
     async def get_pypi_simple_index(request: Request, source_id: str, project: str):
+        return await serve_pypi_simple(request, source_id, project)
+
+    @app.get("/client/{client_id}/get/pypi/{source_id}/simple/{project}/")
+    @app.get("/client/{client_id}/get/pypi/{source_id}/simple/{project}")
+    async def get_client_pypi_simple_index(
+        request: Request, client_id: str, source_id: str, project: str
+    ):
+        return await serve_pypi_simple(request, source_id, project, _client_id(client_id))
+
+    async def serve_pypi_simple(
+        request: Request, source_id: str, project: str, client_id: str | None = None
+    ):
         source = pypi_source(source_id)
         if not source:
             raise HTTPException(status_code=404, detail=f"Unknown PyPI source: {source_id}")
-        return await pypi_index_response(request, source, project)
+        return await pypi_index_response(request, source, project, client_id)
 
     @app.get("/get/pypi/external/{upstream_token}/simple/{project}/")
     @app.get("/get/pypi/external/{upstream_token}/simple/{project}")
     async def get_external_pypi_simple_index(
         request: Request, upstream_token: str, project: str
+    ):
+        return await serve_external_pypi_simple(request, upstream_token, project)
+
+    @app.get("/client/{client_id}/get/pypi/external/{upstream_token}/simple/{project}/")
+    @app.get("/client/{client_id}/get/pypi/external/{upstream_token}/simple/{project}")
+    async def get_client_external_pypi_simple_index(
+        request: Request, client_id: str, upstream_token: str, project: str
+    ):
+        return await serve_external_pypi_simple(request, upstream_token, project, _client_id(client_id))
+
+    async def serve_external_pypi_simple(
+        request: Request, upstream_token: str, project: str, client_id: str | None = None
     ):
         try:
             upstream_url = _decode_dynamic_upstream(
@@ -321,12 +447,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row = store.ensure_dynamic_pypi_source(upstream_url)
         source = dynamic_source(str(row["source_id"]))
         assert source is not None
-        return await pypi_index_response(request, source, project)
+        return await pypi_index_response(request, source, project, client_id)
 
     @app.head("/get/pypi/{source_id}/files/{token}/{filename}")
     @app.get("/get/pypi/{source_id}/files/{token}/{filename}")
     async def get_pypi_artifact(
         request: Request, source_id: str, token: str, filename: str
+    ):
+        return await serve_pypi_artifact(request, source_id, token)
+
+    @app.head("/client/{client_id}/get/pypi/{source_id}/files/{token}/{filename}")
+    @app.get("/client/{client_id}/get/pypi/{source_id}/files/{token}/{filename}")
+    async def get_client_pypi_artifact(
+        request: Request, client_id: str, source_id: str, token: str, filename: str
+    ):
+        return await serve_pypi_artifact(request, source_id, token, _client_id(client_id))
+
+    async def serve_pypi_artifact(
+        request: Request, source_id: str, token: str, client_id: str | None = None
     ):
         source = pypi_source(source_id)
         if not source:
@@ -352,24 +490,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if result.content_length is not None:
                 headers["Content-Length"] = str(result.content_length)
             return StreamingResponse(
-                result.body,
+                tracked_body(client_id, request, result),
                 media_type=result.content_type or "application/octet-stream",
                 headers=headers,
             )
-        return FileResponse(
-            result.file_path,
-            media_type=result.record.content_type or "application/octet-stream",
-            headers={
-                "X-Cache": result.cache_status,
-                "X-Cache-Source": result.record.source_id,
-                "X-Cache-SHA256": result.record.sha256,
-                "Cache-Control": "public, max-age=31536000, immutable",
-            },
-        )
+        record_download(client_id, request, result.record.size, result.cache_status)
+        headers = {
+            "X-Cache": result.cache_status,
+            "X-Cache-Source": result.record.source_id,
+            "X-Cache-SHA256": result.record.sha256,
+            "Cache-Control": "public, max-age=31536000, immutable",
+        }
+        return cached_blob_response(request, result, headers)
 
     @app.head("/get/{source_id}/{path:path}")
     @app.get("/get/{source_id}/{path:path}")
     async def get_cached_channel_file(request: Request, source_id: str, path: str):
+        return await serve_cached_channel_file(request, source_id, path)
+
+    @app.head("/client/{client_id}/get/{source_id}/{path:path}")
+    @app.get("/client/{client_id}/get/{source_id}/{path:path}")
+    async def get_client_cached_channel_file(
+        request: Request, client_id: str, source_id: str, path: str
+    ):
+        return await serve_cached_channel_file(request, source_id, path, _client_id(client_id))
+
+    async def serve_cached_channel_file(
+        request: Request, source_id: str, path: str, client_id: str | None = None
+    ):
         source = settings.sources.get(source_id)
         if not source:
             raise HTTPException(status_code=404, detail=f"Unknown source: {source_id}")
@@ -397,7 +545,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if result.content_length is not None:
                 headers["Content-Length"] = str(result.content_length)
             return StreamingResponse(
-                result.body,
+                tracked_body(client_id, request, result),
                 media_type=result.content_type or "application/octet-stream",
                 headers=headers,
             )
@@ -411,6 +559,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "X-Cache-SHA256": result.record.sha256,
             "Cache-Control": cache_control,
         }
+        if not result.record.is_metadata:
+            record_download(client_id, request, result.record.size, result.cache_status)
+            return cached_blob_response(request, result, headers)
         return FileResponse(
             result.file_path,
             media_type=result.record.content_type or "application/octet-stream",

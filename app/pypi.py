@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import re
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -80,15 +82,22 @@ class PypiGateway:
         self.store = store
         self.gateway = gateway
         self.sources = sources or {}
-        self._rendered_indexes: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+        self._rendered_indexes: OrderedDict[tuple[str, ...], str] = OrderedDict()
         self._max_rendered_indexes = 8
+        # SQLite has one shared connection.  Parsing and HTML construction can
+        # run concurrently, but link registration must retain one short,
+        # ordered database critical section.
+        self._link_registration_lock = threading.Lock()
 
     @staticmethod
     def _artifact_path(upstream_url: str, filename: str) -> str:
         digest = hashlib.sha256(_url_without_fragment(upstream_url).encode()).hexdigest()
         return f"pypi/files/{digest}/{filename}"
 
-    def _render(self, source: SourceConfig, project: str, links: list[SimpleLink], base_url: str) -> str:
+    def _render(
+        self, source: SourceConfig, project: str, links: list[SimpleLink], base_url: str,
+        route_prefix: str = "",
+    ) -> str:
         resolved_links: list[tuple[SimpleLink, str, str, str]] = []
         registrations: list[tuple[str, str, str, str, str]] = []
         for link in links:
@@ -98,12 +107,13 @@ class PypiGateway:
             token = self.store.pypi_link_token(link_source_id, upstream_url)
             resolved_links.append((link, link_source_id, token, upstream_url))
             registrations.append((link_source_id, project, upstream_url, cache_path, link.filename))
-        self.store.register_pypi_links(registrations)
+        with self._link_registration_lock:
+            self.store.register_pypi_links(registrations)
 
         rendered: list[str] = []
         for link, link_source_id, token, upstream_url in resolved_links:
             fragment = urlsplit(link.url).fragment
-            href = f"{base_url}/get/pypi/{link_source_id}/files/{token}/{link.filename}"
+            href = f"{base_url}{route_prefix}/get/pypi/{link_source_id}/files/{token}/{link.filename}"
             if fragment:
                 href += f"#{fragment}"
             attributes = [f'href="{html.escape(href, quote=True)}"']
@@ -139,7 +149,15 @@ class PypiGateway:
             )
         return links
 
-    async def simple_index(self, source: SourceConfig, project: str, base_url: str) -> tuple[str, str]:
+    @staticmethod
+    def _parse_index(content: str, final_url: str) -> list[SimpleLink]:
+        parser = _SimplePageParser(final_url)
+        parser.feed(content)
+        return parser.links
+
+    async def simple_index(
+        self, source: SourceConfig, project: str, base_url: str, route_prefix: str = ""
+    ) -> tuple[str, str]:
         project = normalise_project(project)
         imported_links = self._imported_links(project)
         try:
@@ -151,21 +169,25 @@ class PypiGateway:
             )
         except (PackageNotFound, UpstreamUnavailable):
             if imported_links:
-                return self._render(source, project, imported_links, base_url), "HIT"
+                return self._render(source, project, imported_links, base_url, route_prefix), "HIT"
             raise
-        parser = _SimplePageParser(result.record.final_url)
-        parser.feed(result.file_path.read_text(errors="replace"))
+        # Large PEP 503 pages (notably numpy and pillow) can contain thousands
+        # of links.  Keep their CPU-bound parsing and rewriting off Uvicorn's
+        # event loop so one dependency index cannot delay other pip requests
+        # past pip's default 15-second read timeout.
+        content = await asyncio.to_thread(result.file_path.read_text, errors="replace")
+        upstream_links = await asyncio.to_thread(self._parse_index, content, result.record.final_url)
         # Imported files are served first and shadow an upstream file with the
         # same filename; other upstream versions remain available to pip.
         imported_filenames = {link.filename for link in imported_links}
-        links = imported_links + [link for link in parser.links if link.filename not in imported_filenames]
-        cache_key = (source.name, project, base_url, result.record.sha256)
+        links = imported_links + [link for link in upstream_links if link.filename not in imported_filenames]
+        cache_key = (source.name, project, base_url, route_prefix, result.record.sha256)
         if not imported_links:
             cached_html = self._rendered_indexes.get(cache_key)
             if cached_html is not None:
                 self._rendered_indexes.move_to_end(cache_key)
                 return cached_html, result.cache_status
-        rendered = self._render(source, project, links, base_url)
+        rendered = await asyncio.to_thread(self._render, source, project, links, base_url, route_prefix)
         if not imported_links:
             self._rendered_indexes[cache_key] = rendered
             self._rendered_indexes.move_to_end(cache_key)

@@ -10,6 +10,7 @@ bashrc="$HOME/.bashrc"
 condarc="$HOME/.condarc"
 condarc_backup="$client_dir/condarc.before"
 condarc_existed="$client_dir/condarc.existed"
+client_id_file="$client_dir/client-id"
 
 if [[ -t 1 ]]; then
   blue=$'\033[38;5;39m'; green=$'\033[38;5;40m'; reset=$'\033[0m'
@@ -49,10 +50,30 @@ install_conda_config() {
       printf '0\n' > "$condarc_existed"
     fi
   fi
-  curl -fsSL "$PKGRELAY_URL/bootstrap/client/condarc.yaml" -o "$client_dir/condarc.yaml"
+  curl -fsSL -G --data-urlencode "client_id=$PKGRELAY_CLIENT_ID" \
+    "$PKGRELAY_URL/bootstrap/client/condarc.yaml" -o "$client_dir/condarc.yaml"
   cp -f "$client_dir/condarc.yaml" "$condarc"
   conda config --file "$condarc" --validate >/dev/null
   ok "Conda configured."
+}
+
+register_client() {
+  local machine username
+  if [[ -r "$client_id_file" ]]; then
+    PKGRELAY_CLIENT_ID=$(<"$client_id_file")
+  fi
+  if [[ ! "${PKGRELAY_CLIENT_ID:-}" =~ ^[a-f0-9]{32}$ ]]; then
+    PKGRELAY_CLIENT_ID=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    printf '%s\n' "$PKGRELAY_CLIENT_ID" > "$client_id_file"
+    chmod 0600 "$client_id_file"
+  fi
+  machine=$(hostname -s 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-64)
+  username=$(printf '%s' "${USER:-user}" | tr -cd 'A-Za-z0-9._-' | cut -c1-64)
+  machine=${machine:-host}; username=${username:-user}
+  curl -fsS -X POST -G "$PKGRELAY_URL/api/v1/clients/register" \
+    --data-urlencode "client_id=$PKGRELAY_CLIENT_ID" \
+    --data-urlencode "machine=$machine" \
+    --data-urlencode "username=$username" >/dev/null
 }
 
 restore_conda_config() {
@@ -67,10 +88,18 @@ restore_conda_config() {
 
 install_client() {
   install -d -m 0755 "$client_dir"
+  register_client
+  PKGRELAY_CLIENT_VERSION=$(curl -fsSL "$PKGRELAY_URL/bootstrap/client/version" | tr -d '\r\n')
+  [[ "$PKGRELAY_CLIENT_VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    say "Invalid client version from gateway." >&2
+    exit 1
+  }
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/pip-wrapper.sh" -o "$client_dir/pip-wrapper.sh"
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/conda-wrapper.sh" -o "$client_dir/conda-wrapper.sh"
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/cache-sync.sh" -o "$client_dir/cache-sync.sh"
-  printf 'PKGRELAY_URL=%q\nPKGRELAY_CLIENT_DIR=%q\n' "$PKGRELAY_URL" "$client_dir" > "$client_dir/client.conf"
+  curl -fsSL "$PKGRELAY_URL/bootstrap/client/update-check.sh" -o "$client_dir/update-check.sh"
+  printf 'PKGRELAY_URL=%q\nPKGRELAY_CLIENT_DIR=%q\nPKGRELAY_CLIENT_ID=%q\nPKGRELAY_CLIENT_VERSION=%q\n' \
+    "$PKGRELAY_URL" "$client_dir" "$PKGRELAY_CLIENT_ID" "$PKGRELAY_CLIENT_VERSION" > "$client_dir/client.conf"
   chmod 0755 "$client_dir/cache-sync.sh"
   touch "$bashrc"
   remove_blocks

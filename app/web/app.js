@@ -55,6 +55,22 @@ function renderArtifacts(artifacts) {
   }).join("") : '<tr><td colspan="5" class="muted">尚无缓存对象。</td></tr>';
 }
 
+function renderUsage(usage) {
+  const totals = usage.totals || {};
+  $("usage-users").textContent = (totals.client_count || 0).toLocaleString();
+  $("usage-machines").textContent = (totals.machine_count || 0).toLocaleString();
+  $("usage-distributed").textContent = formatBytes(totals.bytes_served || 0);
+  $("usage-saved").textContent = formatBytes(totals.bytes_saved || 0);
+  const clients = usage.clients || [];
+  $("usage-clients").innerHTML = clients.length ? clients.map((client) => {
+    const downloads = Number(client.downloads || 0);
+    const hits = Number(client.cache_hits || 0);
+    const hitRate = downloads ? `${(hits * 100 / downloads).toFixed(0)}%` : "—";
+    const lastSeen = client.last_seen_at ? new Date(client.last_seen_at * 1000).toLocaleString() : "—";
+    return `<tr><td><span class="machine-name">${escapeHtml(client.machine)}</span></td><td>${escapeHtml(client.username)}</td><td>${downloads.toLocaleString()}</td><td>${hitRate}</td><td>${formatBytes(client.bytes_served || 0)}</td><td class="saved">${formatBytes(client.bytes_saved || 0)}</td><td>${lastSeen}</td></tr>`;
+  }).join("") : '<tr><td colspan="7" class="muted">暂无已识别的客户端包下载记录。</td></tr>';
+}
+
 function renderChannels() {
   const channels = state.sources.filter(isCondaSource);
   $("detail-eyebrow").textContent = "CONDA CACHE";
@@ -134,7 +150,7 @@ async function loadArtifacts() {
 async function refresh() {
   $("refresh").disabled = true;
   try {
-    const [status, sourceData, artifactData] = await Promise.all([api("/api/v1/status"), api("/api/v1/sources"), api("/api/v1/artifacts?limit=20")]);
+    const [status, sourceData, artifactData, usage] = await Promise.all([api("/api/v1/status"), api("/api/v1/sources"), api("/api/v1/artifacts?limit=20"), api("/api/v1/usage")]);
     state.status = status; state.sources = sourceData.sources;
     $("artifact-count").textContent = status.cache.blob_count.toLocaleString();
     $("cache-bytes").textContent = formatBytes(status.cache.total_bytes);
@@ -143,7 +159,7 @@ async function refresh() {
     $("health-text").textContent = "服务正常";
     $("health-dot").classList.remove("offline");
     $("client-config").textContent = `wget -qO /tmp/setenv.sh ${location.origin}/bootstrap/setenv.sh && bash /tmp/setenv.sh && exec bash -l`;
-    renderPools(status.cache); renderArtifacts(artifactData.artifacts);
+    renderPools(status.cache); renderArtifacts(artifactData.artifacts); renderUsage(usage);
   } catch (error) {
     $("health-text").textContent = `连接失败：${error.message}`;
     $("health-dot").classList.add("offline");
