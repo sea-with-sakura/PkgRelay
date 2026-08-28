@@ -73,7 +73,8 @@ register_client() {
   curl -fsS -X POST -G "$PKGRELAY_URL/api/v1/clients/register" \
     --data-urlencode "client_id=$PKGRELAY_CLIENT_ID" \
     --data-urlencode "machine=$machine" \
-    --data-urlencode "username=$username" >/dev/null
+    --data-urlencode "username=$username" \
+    --data-urlencode "client_version=$PKGRELAY_CLIENT_VERSION" >/dev/null
 }
 
 restore_conda_config() {
@@ -88,12 +89,12 @@ restore_conda_config() {
 
 install_client() {
   install -d -m 0755 "$client_dir"
-  register_client
   PKGRELAY_CLIENT_VERSION=$(curl -fsSL "$PKGRELAY_URL/bootstrap/client/version" | tr -d '\r\n')
   [[ "$PKGRELAY_CLIENT_VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || {
     say "Invalid client version from gateway." >&2
     exit 1
   }
+  register_client
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/pip-wrapper.sh" -o "$client_dir/pip-wrapper.sh"
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/conda-wrapper.sh" -o "$client_dir/conda-wrapper.sh"
   curl -fsSL "$PKGRELAY_URL/bootstrap/client/cache-sync.sh" -o "$client_dir/cache-sync.sh"

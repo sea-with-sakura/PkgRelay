@@ -11,8 +11,6 @@ _pkgrelay_route_base="${PKGRELAY_URL%/}"
 if [[ "${PKGRELAY_CLIENT_ID}" =~ ^[a-f0-9]{32}$ ]]; then
   _pkgrelay_route_base+="/client/${PKGRELAY_CLIENT_ID}"
 fi
-# Also covers ``python -m pip`` started from this Bash session.
-export PIP_NO_CACHE_DIR=1
 [[ -r "${_pkgrelay_client_dir}/update-check.sh" ]] && source "${_pkgrelay_client_dir}/update-check.sh"
 
 _pkgrelay_rewrite_pypi_url() {
@@ -29,7 +27,9 @@ _pkgrelay_rewrite_pypi_url() {
 
 _pkgrelay_pip() {
   local executable="$1"; shift
-  declare -F _pkgrelay_check_client_update >/dev/null && _pkgrelay_check_client_update
+  if declare -F _pkgrelay_check_client_update >/dev/null; then
+    _pkgrelay_check_client_update || return $?
+  fi
   local rewritten=() argument next_url replacement has_index=0 subcommand="${1:-}"
   while (($#)); do
     argument="$1"; shift

@@ -130,6 +130,7 @@ class CacheStore:
                 client_id TEXT PRIMARY KEY,
                 machine TEXT NOT NULL,
                 username TEXT NOT NULL,
+                client_version TEXT,
                 last_ip TEXT NOT NULL,
                 first_seen_at REAL NOT NULL,
                 last_seen_at REAL NOT NULL
@@ -153,6 +154,12 @@ class CacheStore:
         columns = {str(row["name"]) for row in self.db.execute("PRAGMA table_info(artifacts)")}
         if "pool" not in columns:
             self.db.execute("ALTER TABLE artifacts ADD COLUMN pool TEXT NOT NULL DEFAULT 'conda'")
+            self.db.commit()
+        client_columns = {
+            str(row["name"]) for row in self.db.execute("PRAGMA table_info(clients)")
+        }
+        if "client_version" not in client_columns:
+            self.db.execute("ALTER TABLE clients ADD COLUMN client_version TEXT")
             self.db.commit()
         # These Conda control documents are metadata too. Older cache records
         # may predate their classification, so correct them on open.
@@ -505,18 +512,35 @@ class CacheStore:
         ).fetchall()
         yield from rows
 
-    def register_client(self, client_id: str, machine: str, username: str, ip_address: str) -> None:
+    def register_client(
+        self,
+        client_id: str,
+        machine: str,
+        username: str,
+        client_version: str,
+        ip_address: str,
+    ) -> None:
         """Register the opaque client id used to attribute package downloads."""
         now = time.time()
         self.db.execute(
-            """INSERT INTO clients (client_id, machine, username, last_ip, first_seen_at, last_seen_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO clients
+               (client_id, machine, username, client_version, last_ip, first_seen_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(client_id) DO UPDATE SET
                  machine=excluded.machine, username=excluded.username,
+                 client_version=excluded.client_version,
                  last_ip=excluded.last_ip, last_seen_at=excluded.last_seen_at""",
-            (client_id, machine, username, ip_address, now, now),
+            (client_id, machine, username, client_version, ip_address, now, now),
         )
         self.db.commit()
+
+    def registered_client_version(self, client_id: str) -> str | None:
+        row = self.db.execute(
+            "SELECT client_version FROM clients WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        if row is None or row["client_version"] is None:
+            return None
+        return str(row["client_version"])
 
     def record_client_download(
         self, client_id: str, *, size: int, cache_status: str, ip_address: str
@@ -562,7 +586,7 @@ class CacheStore:
             (since,),
         ).fetchone()
         clients = self.db.execute(
-            """SELECT c.machine, c.username, c.last_ip, c.last_seen_at,
+            """SELECT c.machine, c.username, c.client_version, c.last_ip, c.last_seen_at,
                       SUM(u.downloads) AS downloads, SUM(u.bytes_served) AS bytes_served,
                       SUM(u.cache_hits) AS cache_hits, SUM(u.bytes_saved) AS bytes_saved
                FROM client_usage_daily u JOIN clients c ON c.client_id = u.client_id

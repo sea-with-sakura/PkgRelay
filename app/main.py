@@ -87,6 +87,7 @@ def _conda_client_config(settings: Settings, cache_url: str) -> str:
 
 _CLIENT_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 _CLIENT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_CLIENT_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _client_id(client_id: str) -> str:
@@ -128,7 +129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gateway = Gateway(store)
     pypi_gateway = PypiGateway(store, gateway, settings.sources)
     client_sync = ClientSync(settings, store)
-    client_version = os.environ.get("PKGRELAY_CLIENT_VERSION", "dev")
+    required_client_version = os.environ.get("PKGRELAY_CLIENT_VERSION", "dev")
     static_delivery_port = int(os.environ.get("PKGRELAY_STATIC_DELIVERY_PORT", "0") or 0)
 
     def dynamic_source(source_id: str) -> SourceConfig | None:
@@ -245,6 +246,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_root = Path(__file__).parent / "web"
     app.mount("/assets", StaticFiles(directory=web_root), name="assets")
 
+    @app.middleware("http")
+    async def require_current_client(request: Request, call_next):
+        path_parts = request.url.path.split("/")
+        if len(path_parts) > 2 and path_parts[1] == "client":
+            requested_client_id = path_parts[2]
+            if not _CLIENT_ID_PATTERN.fullmatch(requested_client_id):
+                return JSONResponse(status_code=400, content={"detail": "Invalid client id"})
+            installed_version = store.registered_client_version(requested_client_id)
+            if installed_version != required_client_version:
+                setup_url = f"{str(request.base_url).rstrip('/')}/bootstrap/setenv.sh"
+                return JSONResponse(
+                    status_code=426,
+                    content={
+                        "detail": "PkgRelay client update required",
+                        "installed_version": installed_version,
+                        "required_version": required_client_version,
+                        "update_command": (
+                            f"wget -qO /tmp/setenv.sh {setup_url} && "
+                            "bash /tmp/setenv.sh && exec bash -l"
+                        ),
+                    },
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-PkgRelay-Required-Version": required_client_version,
+                    },
+                )
+        return await call_next(request)
+
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
         return {"status": "ok", "sources": sorted(settings.sources)}
@@ -263,7 +292,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/bootstrap/client/version", include_in_schema=False)
     async def bootstrap_client_version() -> Response:
-        return Response(client_version + "\n", media_type="text/plain", headers={"Cache-Control": "no-store"})
+        return Response(
+            required_client_version + "\n",
+            media_type="text/plain",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/bootstrap/client/{name}", include_in_schema=False)
     async def bootstrap_client_file(request: Request, name: str, client_id: str = "") -> Response:
@@ -294,11 +327,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.post("/api/v1/clients/register")
-    async def register_client(request: Request, client_id: str, machine: str, username: str) -> dict[str, str]:
+    async def register_client(
+        request: Request,
+        client_id: str,
+        machine: str,
+        username: str,
+        client_version: str,
+    ) -> dict[str, str]:
         client_id = _client_id(client_id)
         if not _CLIENT_LABEL_PATTERN.fullmatch(machine) or not _CLIENT_LABEL_PATTERN.fullmatch(username):
             raise HTTPException(status_code=400, detail="Invalid machine or username")
-        store.register_client(client_id, machine, username, client_ip(request))
+        if not _CLIENT_VERSION_PATTERN.fullmatch(client_version):
+            raise HTTPException(status_code=400, detail="Invalid client version")
+        if client_version != required_client_version:
+            raise HTTPException(status_code=409, detail="Client version changed; rerun bootstrap")
+        store.register_client(
+            client_id, machine, username, client_version, client_ip(request)
+        )
         return {"status": "registered"}
 
     @app.get("/api/v1/usage")

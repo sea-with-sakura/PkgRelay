@@ -16,7 +16,7 @@ PKGRELAY_URL="http://gateway.test"
 PKGRELAY_FAKE_REMOTE_VERSION="{remote_version}"
 _pkgrelay_check_client_update
 '''
-    return subprocess.run(["bash", "-c", command], capture_output=True, text=True, check=True)
+    return subprocess.run(["bash", "-c", command], capture_output=True, text=True)
 
 
 def test_outdated_client_is_notified_after_check_interval(tmp_path: Path):
@@ -24,14 +24,21 @@ def test_outdated_client_is_notified_after_check_interval(tmp_path: Path):
 
     result = run_check(tmp_path, "old-version", "new-version")
 
-    assert "PkgRelay client update available" in result.stderr
-    assert (tmp_path / "update-notified-version").read_text() == "new-version\n"
+    assert result.returncode == 42
+    assert "package command blocked" in result.stderr
 
 
-def test_update_check_is_throttled_for_only_one_minute(tmp_path: Path):
+def test_recent_previous_check_does_not_allow_an_outdated_client(tmp_path: Path):
     (tmp_path / "update-check-at").write_text(f"{int(time.time())}\n")
 
     result = run_check(tmp_path, "old-version", "new-version")
 
+    assert result.returncode == 42
+    assert "package command blocked" in result.stderr
+
+
+def test_current_client_is_allowed(tmp_path: Path):
+    result = run_check(tmp_path, "current-version", "current-version")
+
+    assert result.returncode == 0
     assert result.stderr == ""
-    assert not (tmp_path / "update-notified-version").exists()

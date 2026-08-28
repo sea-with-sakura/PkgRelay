@@ -100,15 +100,25 @@ def test_client_download_usage_is_aggregated_by_machine_and_user(tmp_path: Path)
     with TestClient(app) as client:
         registered = client.post(
             "/api/v1/clients/register",
-            params={"client_id": client_id, "machine": "gpu-01", "username": "sakura"},
+            params={
+                "client_id": client_id,
+                "machine": "gpu-01",
+                "username": "sakura",
+                "client_version": "dev",
+            },
         )
         response = client.get(f"/client/{client_id}/get/example/linux-64/demo-1.0-0.conda")
+        blocked = client.get(
+            f"/client/{'b' * 32}/get/example/linux-64/demo-1.0-0.conda"
+        )
         usage = client.get("/api/v1/usage")
         routes = client.get(f"/bootstrap/client/condarc.yaml?client_id={client_id}")
 
     assert registered.status_code == 200
     assert response.status_code == 200
     assert response.content == b"demo"
+    assert blocked.status_code == 426
+    assert blocked.json()["detail"] == "PkgRelay client update required"
     assert usage.json()["totals"] == {
         "client_count": 1,
         "downloads": 1,

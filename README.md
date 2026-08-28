@@ -29,7 +29,7 @@ PkgRelay makes the gateway the durable package cache. Conda and pip still resolv
 - **Transparent commands** — users keep normal `conda`, `pip`, and `pip3` workflows.
 - **External pip indexes** — CUDA commands keep their original `--index-url`; the client rewrites their transport path through PkgRelay.
 - **Streaming cache misses** — large wheels are forwarded while the gateway writes them to cache.
-- **Transient client downloads** — pip does not retain a cache; Conda uses and removes a dedicated staging directory after package operations.
+- **Transient client downloads** — supported `pip`/`pip3` commands do not retain a cache; Conda uses and removes a dedicated staging directory after package operations.
 - **Fast cache hits** — cached Blobs are handed to a dedicated static delivery process; first misses still stream through the gateway.
 - **Web console** — browse cache pools, Conda channels, package files, size, hit counts, and usage.
 - **Usage summary** — aggregate package downloads, LAN distribution, hit rate, and avoided upstream traffic by machine and user.
@@ -87,7 +87,9 @@ wget -qO /tmp/setenv.sh http://<gateway-ip>:45612/bootstrap/setenv.sh && bash /t
 
 Choose **Install**. PkgRelay backs up the original user `.condarc` once and restores it on **Uninstall**. It also creates a random telemetry-only client id and registers the current machine and user; existing clients can run this command once again to enable usage reporting.
 
-Clients check the gateway version at a low frequency when `conda`, `pip`, or `pip3` is used. If a newer client is published, the terminal prints the same one-line setup command; rerun it to update without interrupting the current install.
+Clients check the gateway version whenever `conda`, `pip`, or `pip3` is used. A newer client is downloaded, syntax-checked, installed, and registered automatically before the original package command continues. Package commands are blocked only when that update fails.
+
+The gateway requires an exact client-version match. Missing or outdated clients receive HTTP 426 on client-scoped Conda/PyPI routes. The wrappers normally update before reaching that gate; if network or file permissions prevent an automatic update, rerun the setup command and choose **Install**.
 
 ## Usage dashboard
 
@@ -114,7 +116,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 Do **not** manually replace `--index-url` with a gateway URL. The first request may fetch upstream; later clients receive the same file from the LAN cache.
 
-> Use `pip` or `pip3` for gateway routing. `python -m pip` inherits the no-local-cache setting from the current Bash session, but does not use the Bash URL-rewrite function.
+> **`python -m pip` and `python3 -m pip` are unsupported.** They bypass PkgRelay's Bash wrapper and therefore are not guaranteed to use the central cache, automatic client updates, or the version gate. Use `pip` or `pip3` consistently.
 
 ## Cache lifecycle
 
@@ -131,7 +133,7 @@ flowchart LR
 | --- | --- | --- |
 | Gateway packages and metadata | Host directory mounted at `/data` | Shared cache of record. |
 | Conda / pip environments | Client machine | Installed environments, not download cache. |
-| New pip cache | None | The client exports `PIP_NO_CACHE_DIR=1`. |
+| New pip cache | None | Supported `pip`/`pip3` commands add `--no-cache-dir`. |
 | New Conda package cache | None after transaction | Staging directory is cleared after package-changing commands. |
 
 Existing legacy directories such as `miniconda3/pkgs` are not deleted automatically: older environments may use symlinks into them.

@@ -47,7 +47,9 @@ _pkgrelay_clear_conda_staging() {
 }
 
 conda() {
-  declare -F _pkgrelay_check_client_update >/dev/null && _pkgrelay_check_client_update
+  if declare -F _pkgrelay_check_client_update >/dev/null; then
+    _pkgrelay_check_client_update || return $?
+  fi
   if ! _pkgrelay_conda_changes_packages "$@"; then
     _pkgrelay_base_conda "$@"
     return $?
