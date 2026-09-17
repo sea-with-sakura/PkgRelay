@@ -20,10 +20,11 @@ services:
       - --proxy-headers
     volumes:
       - ./config.yaml:/config/config.yaml:ro
-      - /4090data1/pkgrelay/data:/data
+      - /data_panel/pkgrelay/cache:/data
     environment:
       PKGRELAY_CACHE_DIR: /data
       PKGRELAY_STATIC_DELIVERY_PORT: "45613"
+      PKGRELAY_CLIENT_VERSION: ${PKGRELAY_CLIENT_VERSION:-dev}
 
   static:
     image: pkgrelay:dev
@@ -38,4 +39,4 @@ services:
       - --root
       - /data/files
     volumes:
-      - /4090data1/pkgrelay/data:/data:ro
+      - /data_panel/pkgrelay/cache:/data:ro

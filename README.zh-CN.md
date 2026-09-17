@@ -74,7 +74,7 @@ curl http://127.0.0.1:45612/healthz
 
 Web 控制台地址为 `http://<网关IP>:45612/`。
 
-默认 Compose 配置将中央数据挂载到宿主机 `/4090data1/pkgrelay/data`。若存储位置不同，请先修改 `docker-compose.yml` 中的宿主机路径。网关与静态分发进程采用 Linux Docker 的 host network 以避免 bridge/NAT 限制缓存分发速度；客户端仍只配置并访问 `45612`，命中包的内部跳转由工具自动处理。
+默认 Compose 配置将中央数据挂载到宿主机 `/data_panel/pkgrelay/cache`。若存储位置不同，请先修改 `docker-compose.yml` 中的宿主机路径。网关与静态分发进程采用 Linux Docker 的 host network 以避免 bridge/NAT 限制缓存分发速度；客户端仍只配置并访问 `45612`，命中包的内部跳转由工具自动处理。
 
 ## 客户端接入
 
@@ -188,7 +188,7 @@ curl http://127.0.0.1:45612/healthz
 
 大包下载进行中请避免重建服务；容器重建会短暂中断正在进行的客户端连接。
 
-请用 `./rebuild.sh` 发布更新：它会把当前 Git commit 写入网关版本，供旧客户端识别更新。
+请用 `./rebuild.sh` 发布更新：它会根据 `client/` 目录内容生成网关客户端版本，供旧客户端识别更新。
 
 ## 安全与边界
 

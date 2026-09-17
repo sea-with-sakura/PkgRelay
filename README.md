@@ -75,7 +75,7 @@ curl http://127.0.0.1:45612/healthz
 
 Open the web console at `http://<gateway-ip>:45612/`.
 
-The default Compose file mounts central data at `/4090data1/pkgrelay/data`. Change that host path in `docker-compose.yml` if your storage layout differs. The gateway and static delivery process use Linux Docker host networking to avoid bridge/NAT limits; clients still configure only port `45612` and follow cache-hit redirects automatically.
+The default Compose file mounts central data at `/data_panel/pkgrelay/cache`. Change that host path in `docker-compose.yml` if your storage layout differs. The gateway and static delivery process use Linux Docker host networking to avoid bridge/NAT limits; clients still configure only port `45612` and follow cache-hit redirects automatically.
 
 ## Client setup
 
@@ -189,7 +189,7 @@ curl http://127.0.0.1:45612/healthz
 
 Avoid rebuilding while large downloads are active: recreating the container briefly interrupts in-flight connections.
 
-Use `./rebuild.sh` to publish updates. It embeds the current Git commit in the gateway so older clients can detect a newer release.
+Use `./rebuild.sh` to publish updates. It derives the gateway client version from the `client/` directory contents so installed clients can detect a newer release.
 
 ## Security and scope
 

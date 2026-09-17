@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export https_proxy=http://127.0.0.1:7890
-export http_proxy=http://127.0.0.1:7890
+if [[ "${PKGRELAY_USE_LOCAL_PROXY:-0}" == "1" ]]; then
+  export https_proxy="${https_proxy:-http://127.0.0.1:7890}"
+  export http_proxy="${http_proxy:-http://127.0.0.1:7890}"
+fi
 # Hash the actual client payload so uncommitted client fixes also produce a
 # version change and installed clients receive the update notification.
 PKGRELAY_CLIENT_VERSION=$(

@@ -9,7 +9,7 @@ set -euo pipefail
 }
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-cache_dir=/4090data1/pkgrelay/data
+cache_dir=/data_panel/pkgrelay/cache
 [[ -f "$project_dir/docker-compose.yml" ]] || { echo "Run from the PkgRelay project." >&2; exit 2; }
 [[ -d "$cache_dir" ]] || { echo "Cache directory does not exist: $cache_dir" >&2; exit 0; }
 
