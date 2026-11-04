@@ -156,7 +156,12 @@ class PypiGateway:
         return parser.links
 
     async def simple_index(
-        self, source: SourceConfig, project: str, base_url: str, route_prefix: str = ""
+        self,
+        source: SourceConfig,
+        project: str,
+        base_url: str,
+        route_prefix: str = "",
+        force_revalidate: bool = False,
     ) -> tuple[str, str]:
         project = normalise_project(project)
         imported_links = self._imported_links(project)
@@ -166,6 +171,7 @@ class PypiGateway:
                 f"pypi-index/{project}.html",
                 metadata=True,
                 remote_path=source.index_path_template.format(project=project),
+                force_revalidate=force_revalidate,
             )
         except (PackageNotFound, UpstreamUnavailable):
             if imported_links:

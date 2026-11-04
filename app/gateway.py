@@ -66,19 +66,30 @@ class Gateway:
         requested_path: str,
         metadata: bool | None = None,
         remote_path: str | None = None,
+        force_revalidate: bool = False,
     ) -> CacheResult:
         path = normalise_path(requested_path)
         metadata = is_metadata_path(path) if metadata is None else metadata
         target = self.store.file_path(source.name, path)
         record = self.store.get(source.name, path)
-        if target.is_file() and record and self._fresh(record, metadata, source):
+        if (
+            target.is_file()
+            and record
+            and not force_revalidate
+            and self._fresh(record, metadata, source)
+        ):
             self.store.touch(source.name, path)
             return CacheResult(target, self.store.get(source.name, path), "HIT")  # type: ignore[arg-type]
 
         lock = await self._lock_for(source.name, path)
         async with lock:
             record = self.store.get(source.name, path)
-            if target.is_file() and record and self._fresh(record, metadata, source):
+            if (
+                target.is_file()
+                and record
+                and not force_revalidate
+                and self._fresh(record, metadata, source)
+            ):
                 self.store.touch(source.name, path)
                 return CacheResult(target, self.store.get(source.name, path), "HIT")  # type: ignore[arg-type]
             upstream_path = remote_path or path
@@ -87,7 +98,7 @@ class Gateway:
             )
             reused = self._reuse_by_url(source, path, metadata, urls)
             if reused:
-                if self._fresh(reused.record, metadata, source):
+                if not force_revalidate and self._fresh(reused.record, metadata, source):
                     return reused
                 # A matching blob can be reused across a legacy/static source
                 # and a dynamically mapped Channel.  Metadata still honours
@@ -300,6 +311,10 @@ class Gateway:
                 metadata=metadata,
                 etag=reusable.etag,
                 last_modified=reusable.last_modified,
+                # Sharing a metadata blob must not make it newer. Otherwise
+                # an expired index can copy itself (or another source) and
+                # avoid its required upstream revalidation.
+                fetched_at=reusable.fetched_at if metadata else None,
             )
             self.store.touch(source.name, path)
             return CacheResult(self.store.file_path(source.name, path), reused, "REUSED")

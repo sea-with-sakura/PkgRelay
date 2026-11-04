@@ -222,6 +222,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project,
                 str(request.base_url).rstrip("/"),
                 f"/client/{client_id}" if client_id else "",
+                force_revalidate=_request_requires_revalidation(request),
             )
         except InvalidProject as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -233,6 +234,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content,
             headers={"X-Cache": cache_status, "Cache-Control": f"public, max-age={source.metadata_ttl_seconds}"},
         )
+
+    def _request_requires_revalidation(request: Request) -> bool:
+        """Honor standard client cache-bypass directives for mutable indexes."""
+        cache_control = request.headers.get("cache-control", "")
+        directives = {
+            directive.strip().lower().split("=", 1)[0]
+            for directive in cache_control.split(",")
+            if directive.strip()
+        }
+        return "no-cache" in directives or request.headers.get("pragma", "").lower() == "no-cache"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):

@@ -276,8 +276,10 @@ class CacheStore:
         metadata: bool,
         etag: str | None,
         last_modified: str | None,
+        fetched_at: float | None = None,
     ) -> ArtifactRecord:
         now = time.time()
+        fetched_at = now if fetched_at is None else fetched_at
         pool = self.pool_for_source(source_id)
         self.db.execute(
             """INSERT INTO artifacts
@@ -300,7 +302,7 @@ class CacheStore:
                 size,
                 content_type,
                 int(metadata),
-                now,
+                fetched_at,
                 now,
                 etag,
                 last_modified,

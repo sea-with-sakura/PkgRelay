@@ -53,8 +53,8 @@ sources:
   pypi:
     kind: pypi
     upstreams:
-      - https://pypi.tuna.tsinghua.edu.cn
       - https://pypi.org
+      - https://pypi.tuna.tsinghua.edu.cn
     # Project indexes are cached briefly. Package files remain immutable.
     metadata_ttl_seconds: 600
     fallback_on_not_found: true
