@@ -131,6 +131,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     client_sync = ClientSync(settings, store)
     required_client_version = os.environ.get("PKGRELAY_CLIENT_VERSION", "dev")
     static_delivery_port = int(os.environ.get("PKGRELAY_STATIC_DELIVERY_PORT", "0") or 0)
+    static_delivery_url = os.environ.get("PKGRELAY_STATIC_DELIVERY_URL", "").rstrip("/")
+    if static_delivery_url:
+        parsed_static_url = urlsplit(static_delivery_url)
+        if (
+            parsed_static_url.scheme not in {"http", "https"}
+            or not parsed_static_url.netloc
+            or parsed_static_url.path not in {"", "/"}
+            or parsed_static_url.query
+            or parsed_static_url.fragment
+        ):
+            raise ConfigurationError(
+                "PKGRELAY_STATIC_DELIVERY_URL must be an HTTP(S) origin without a path"
+            )
 
     def dynamic_source(source_id: str) -> SourceConfig | None:
         row = store.get_dynamic_pypi_source(source_id)
@@ -184,12 +197,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def cached_blob_response(request: Request, result, headers: dict[str, str]):
         headers = {**headers, "Content-Length": str(result.record.size)}
-        if static_delivery_port and request.url.hostname:
+        delivery_origin = static_delivery_url
+        if not delivery_origin and static_delivery_port and request.url.hostname:
+            delivery_origin = (
+                f"{request.url.scheme}://{request.url.hostname}:{static_delivery_port}"
+            )
+        if delivery_origin:
             redirect_headers = dict(headers)
             redirect_headers.pop("Content-Length", None)
             return RedirectResponse(
-                f"{request.url.scheme}://{request.url.hostname}:{static_delivery_port}/blobs/"
-                f"{result.record.pool}/{result.record.sha256}",
+                f"{delivery_origin}/blobs/{result.record.pool}/{result.record.sha256}",
                 status_code=307,
                 headers=redirect_headers,
             )

@@ -82,6 +82,36 @@ def test_static_conda_channel_serves_a_cached_package(tmp_path: Path):
     assert response.headers["content-length"] == "4"
 
 
+def test_cached_package_redirects_to_static_delivery_url(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "PKGRELAY_STATIC_DELIVERY_URL", "https://pkgrelay.semi.sakuracloud.top"
+    )
+    settings = Settings(
+        cache_dir=tmp_path / "cache",
+        import_roots=(),
+        sources={"example": SourceConfig("example", ("https://conda.example.test",))},
+    )
+    app = create_app(settings)
+    record = app.state.store.store_bytes(
+        source_id="example",
+        path="linux-64/demo-1.0-0.conda",
+        content=b"demo",
+        upstream_url="https://conda.example.test/linux-64/demo-1.0-0.conda",
+        metadata=False,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/get/example/linux-64/demo-1.0-0.conda", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == (
+        f"https://pkgrelay.semi.sakuracloud.top/blobs/{record.pool}/{record.sha256}"
+    )
+    assert response.headers["content-length"] == "0"
+
+
 def test_client_download_usage_is_aggregated_by_machine_and_user(tmp_path: Path):
     settings = Settings(
         cache_dir=tmp_path / "cache",
